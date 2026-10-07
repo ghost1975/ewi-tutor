@@ -1,0 +1,10 @@
+Репетитор EWI використовує:
+
+Fluid R3 GM SoundFont, автор Frank Wen. Ліцензія Creative Commons Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/).
+Семпли підготовлені проєктом midi-js-soundfonts (https://github.com/gleitz/midi-js-soundfonts).
+
+lamejs — кодер MP3 на JavaScript, ліцензія LGPL 3.0 (https://github.com/zhuker/lamejs). Файл vendor/lame.min.js використовується без змін.
+
+Шрифти IBM Plex Sans, Spectral, Noto Music — SIL Open Font License 1.1.
+
+Electron — ліцензія MIT.

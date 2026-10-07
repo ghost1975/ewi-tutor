@@ -1,0 +1,62 @@
+{
+  "name": "ewi-tutor",
+  "productName": "EWI Tutor",
+  "version": "1.2.1",
+  "description": "Репетитор гри на Akai EWI Solo",
+  "author": "Andrii Pylypenko",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.ewitutor.app",
+    "productName": "EWI Tutor",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "EWI-Tutor-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Репетитор EWI"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ghost1975",
+        "repo": "ewi-tutor",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
