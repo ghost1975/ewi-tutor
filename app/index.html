@@ -273,7 +273,19 @@ function initMidi(){
 
 // ---------- Аудіо: контекст, синтезатор, метроном ----------
 let AC = null;
-function ac(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'}); MASTER = AC.createGain(); MASTER.connect(AC.destination); } if(AC.state==='suspended') AC.resume(); return AC; }
+function ac(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'}); MASTER = AC.createGain(); MASTER.connect(AC.destination);
+    if(Settings.sinkId && AC.setSinkId) AC.setSinkId(Settings.sinkId).catch(()=>{ Settings.sinkId = ''; saveSettings(); }); }
+  if(AC.state==='suspended') AC.resume(); return AC; }
+// діагностика і вибір пристрою виводу звуку
+async function audioOutputs(){ try{ let ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audiooutput');
+    if(ds.length && ds.every(d=>!d.label)){ try{ const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audiooutput'); }catch(e){} }
+    return ds; }catch(e){ return []; } }
+async function setOutput(id){ Settings.sinkId = id || ''; saveSettings(); const a = ac(); if(a.setSinkId){ try{ await a.setSinkId(Settings.sinkId); return true; }catch(e){ return false; } } return false; }
+async function soundTest(){ const a = ac(); if(a.state !== 'running'){ try{ await a.resume(); }catch(e){} }
+  const an = a.createAnalyser(); an.fftSize = 1024; bus().connect(an); let peak = 0; const iv = setInterval(()=>{ const b = new Float32Array(1024); an.getFloatTimeDomainData(b); for(const x of b) peak = Math.max(peak, Math.abs(x)); }, 20);
+  const t = a.currentTime + 0.1; [67, 71, 74].forEach((n,i)=>tone(n, t + i*0.35, 0.3, 0.2));
+  await new Promise(r=>setTimeout(r, 1300)); clearInterval(iv); try{ bus().disconnect(an); }catch(e){}
+  return { state:a.state, rate:a.sampleRate, peak:+peak.toFixed(2), sink: a.sinkId === undefined ? 'н/д' : (a.sinkId || 'типовий'), latency: Math.round(((a.outputLatency||0)+(a.baseLatency||0))*1000) }; }
 // усе, що звучить із застосунку, йде через одну шину, щоб його можна було записати разом із грою
 let MASTER = null; const bus = () => { ac(); return MASTER; };
 // переведення часу аудіоконтексту в performance.now()
@@ -490,7 +502,7 @@ async function sfLoad(inst){
   const file = SF_FILES[inst]; if(!file) return;
   SF.loading[inst] = (async()=>{
     let txt = null;
-    for(const base of (DESKTOP ? ['soundfonts/', SF_CDN] : [SF_CDN])){
+    for(const base of (DESKTOP ? ['ewimedia://app/soundfonts/', SF_CDN] : [SF_CDN])){
       try{ const r = await fetch(base + file + '-mp3.js'); if(r.ok){ txt = await r.text(); break; } }catch(e){}
     }
     if(!txt) throw new Error('не вдалося завантажити '+file);
@@ -889,7 +901,7 @@ function runNotes(box, ex, ctx){
     const bpm = Math.min(240, Math.max(30, +P.bpm.value || ex.playBpm || 80)), total = pItems.reduce((a,b)=>a+b.d,0);
     const h = schedule({bpm, beats:ex.beats||4, countIn:0, totalBeats:total, seq:pItems, guide:true, swing:ex.swing, clickOn:false,
       backing: P.back && P.back.checked ? {chords:ex.playChords, style:ex.playStyle} : null, tracks: ex.tracks && ex.tracks.length ? {list:ex.tracks, muted:ex.muted} : null});
-    playing = {h, timers:[]}; P.play.textContent = '■ Стоп';
+    playing = {h, timers:[]}; P.play.textContent = '■ Стоп'; setTimeout(()=>{ if(ac().state !== 'running') toast('Аудіо не запустилось. Відкрий Налаштування → «Перевірити звук».'); }, 600);
     let b = 0, k = 0; const delay = h.t0Perf - now();
     pItems.forEach(it=>{ if(it.n!=null){ const idx = k++; playing.timers.push(setTimeout(()=>{ playIdx = idx; render(); }, delay + swingPos(b, ex.swing)*h.spbMs)); } b += it.d; });
     playing.timers.push(setTimeout(stopPlay, h.endPerf - now() + 150));
@@ -2479,6 +2491,7 @@ function viewSettings(v){
     <div class="row" style="margin-top:10px"><button id="sCal">Калібрувати октаву</button><span class="muted" id="sCalT">Зсув: ${Settings.offset} півтонів</span></div>
     <h3>Затримка</h3><p class="muted">Компенсує час між звуком і реакцією застосунку. «Виміряти» дає 8 клацань: грай коротку ноту точно на кожне.</p>
     <div class="row"><label>MIDI, мс <input type="number" id="sLm" value="${Settings.latMidi}"></label><label>Мікрофон, мс <input type="number" id="sLa" value="${Settings.latAudio}"></label><button id="sLat">Виміряти</button><span class="muted" id="sLatT"></span></div>
+    <h3>Вивід звуку</h3><div class="row"><label class="muted">Пристрій <select id="sOut"><option value="">Типовий пристрій Windows</option></select></label><button id="sTest">Перевірити звук</button><span class="muted" id="sTestT"></span></div>
     <h3>Звук і аналіз</h3>
     <div class="row"><label>Камертон A4, Гц <input type="number" id="sA4" value="${Settings.a4}"></label><label>Діапазон pitch bend, півтонів <input type="number" id="sBr" value="${Settings.bendRange}"></label><label>Поріг тиші, дБ <input type="number" id="sGate" value="${Settings.gate}"></label><label>Гучність метронома <input type="number" id="sMv" step="0.1" min="0" max="1" value="${Settings.metroVol}"></label></div>
     <div class="row" style="margin-top:8px"><label><input type="checkbox" id="sGuide"> звук-підказка у вправах за замовчуванням</label><label class="muted" style="margin-left:14px"><input type="checkbox" id="sRecMix" ${Settings.recMix!==false?'checked':''}> записувати разом із супроводом</label></div></div>
@@ -2513,6 +2526,10 @@ function viewSettings(v){
     ['dRem','dRemT','dAuto','dCl'].forEach(id=>$(id).onchange = sc); }
   if($('sRecMix')) $('sRecMix').onchange = e=>{ Settings.recMix = e.target.checked; saveSettings(); };
   $('sReal').onchange = e=>{ Settings.realistic = e.target.checked; saveSettings(); };
+  audioOutputs().then(ds=>{ const sel = $('sOut'); if(!sel) return; ds.filter(d=>d.deviceId && d.deviceId!=='default').forEach(d=>{ const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || 'Пристрій '+d.deviceId.slice(0,6); sel.appendChild(o); }); sel.value = Settings.sinkId || ''; });
+  $('sOut').onchange = async e=>{ const ok = await setOutput(e.target.value); $('sTestT').textContent = ok ? 'Пристрій змінено. Натисни «Перевірити звук».' : 'Не вдалося перемкнути пристрій.'; };
+  $('sTest').onclick = async ()=>{ $('sTestT').textContent = 'Граю три ноти…'; const r = await soundTest();
+    $('sTestT').textContent = r.peak > 0.01 ? `Застосунок відтворює звук (рівень ${r.peak}, ${r.rate} Гц, затримка ${r.latency} мс, вивід: ${r.sink}). Якщо не чути, вибери інший пристрій вище або перевір мікшер гучності Windows.` : `Звуку немає всередині застосунку: стан аудіо «${r.state}». Перезапусти застосунок і повідом про це.`; };
   $('sUnl').onchange = e=>{ Settings.unlockAll = e.target.checked; saveSettings(); };
   $('sReset').onclick = ()=>{ if(confirm('Скинути весь прогрес уроків і статистику?')){ Progress.lessons = {}; Progress.days = {}; Progress.wrong = {}; Progress.log = []; saveProgress(); go('settings'); } };
   $('sExp').onclick = ()=>{ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({progress:Progress, settings:Settings, songs:LS.get('songs',[])}, null, 1)], {type:'application/json'})); a.download = 'ewi-progress.json'; a.click(); };

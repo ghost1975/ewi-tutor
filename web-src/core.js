@@ -112,7 +112,19 @@ function initMidi(){
 
 // ---------- Аудіо: контекст, синтезатор, метроном ----------
 let AC = null;
-function ac(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'}); MASTER = AC.createGain(); MASTER.connect(AC.destination); } if(AC.state==='suspended') AC.resume(); return AC; }
+function ac(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'}); MASTER = AC.createGain(); MASTER.connect(AC.destination);
+    if(Settings.sinkId && AC.setSinkId) AC.setSinkId(Settings.sinkId).catch(()=>{ Settings.sinkId = ''; saveSettings(); }); }
+  if(AC.state==='suspended') AC.resume(); return AC; }
+// діагностика і вибір пристрою виводу звуку
+async function audioOutputs(){ try{ let ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audiooutput');
+    if(ds.length && ds.every(d=>!d.label)){ try{ const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audiooutput'); }catch(e){} }
+    return ds; }catch(e){ return []; } }
+async function setOutput(id){ Settings.sinkId = id || ''; saveSettings(); const a = ac(); if(a.setSinkId){ try{ await a.setSinkId(Settings.sinkId); return true; }catch(e){ return false; } } return false; }
+async function soundTest(){ const a = ac(); if(a.state !== 'running'){ try{ await a.resume(); }catch(e){} }
+  const an = a.createAnalyser(); an.fftSize = 1024; bus().connect(an); let peak = 0; const iv = setInterval(()=>{ const b = new Float32Array(1024); an.getFloatTimeDomainData(b); for(const x of b) peak = Math.max(peak, Math.abs(x)); }, 20);
+  const t = a.currentTime + 0.1; [67, 71, 74].forEach((n,i)=>tone(n, t + i*0.35, 0.3, 0.2));
+  await new Promise(r=>setTimeout(r, 1300)); clearInterval(iv); try{ bus().disconnect(an); }catch(e){}
+  return { state:a.state, rate:a.sampleRate, peak:+peak.toFixed(2), sink: a.sinkId === undefined ? 'н/д' : (a.sinkId || 'типовий'), latency: Math.round(((a.outputLatency||0)+(a.baseLatency||0))*1000) }; }
 // усе, що звучить із застосунку, йде через одну шину, щоб його можна було записати разом із грою
 let MASTER = null; const bus = () => { ac(); return MASTER; };
 // переведення часу аудіоконтексту в performance.now()

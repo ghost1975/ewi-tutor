@@ -151,7 +151,7 @@ function runNotes(box, ex, ctx){
     const bpm = Math.min(240, Math.max(30, +P.bpm.value || ex.playBpm || 80)), total = pItems.reduce((a,b)=>a+b.d,0);
     const h = schedule({bpm, beats:ex.beats||4, countIn:0, totalBeats:total, seq:pItems, guide:true, swing:ex.swing, clickOn:false,
       backing: P.back && P.back.checked ? {chords:ex.playChords, style:ex.playStyle} : null, tracks: ex.tracks && ex.tracks.length ? {list:ex.tracks, muted:ex.muted} : null});
-    playing = {h, timers:[]}; P.play.textContent = '■ Стоп';
+    playing = {h, timers:[]}; P.play.textContent = '■ Стоп'; setTimeout(()=>{ if(ac().state !== 'running') toast('Аудіо не запустилось. Відкрий Налаштування → «Перевірити звук».'); }, 600);
     let b = 0, k = 0; const delay = h.t0Perf - now();
     pItems.forEach(it=>{ if(it.n!=null){ const idx = k++; playing.timers.push(setTimeout(()=>{ playIdx = idx; render(); }, delay + swingPos(b, ex.swing)*h.spbMs)); } b += it.d; });
     playing.timers.push(setTimeout(stopPlay, h.endPerf - now() + 150));

@@ -91,8 +91,9 @@ ipcMain.handle('media:save', (e, name, bytes) => {
   fs.writeFileSync(path.join(dir('rep'), safe), Buffer.from(bytes)); return safe;
 });
 function serveMedia(req) {
-  const name = decodeURIComponent(new URL(req.url).pathname.replace(/^\/+/, ''));
-  const file = path.join(dir('rep'), path.basename(name));
+  const u = new URL(req.url), name = decodeURIComponent(u.pathname.replace(/^\/+/, ''));
+  // ewimedia://app/... — файли самого застосунку (семпли), ewimedia://rep/... — мінусовки з «Мого репертуару»
+  const file = u.hostname === 'app' ? path.join(__dirname, 'app', path.normalize(name).replace(/^(\.\.[\/\\])+/, '')) : path.join(dir('rep'), path.basename(name));
   return net.fetch(pathToFileURL(file).toString(), { headers: req.headers }).then(r => {
     const h = new Headers(r.headers); h.set('Access-Control-Allow-Origin', '*');
     return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
@@ -184,7 +185,7 @@ app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   // MIDI-інструмент і мікрофон дозволені без запитів
-  const ok = new Set(['midi', 'midiSysex', 'media', 'audioCapture', 'clipboard-sanitized-write']);
+  const ok = new Set(['midi', 'midiSysex', 'media', 'audioCapture', 'speaker-selection', 'clipboard-sanitized-write']);
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(ok.has(perm)));
   session.defaultSession.setPermissionCheckHandler((wc, perm) => ok.has(perm));
   // збережені дублі одразу лягають у папку «Записи»

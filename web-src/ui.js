@@ -360,6 +360,7 @@ function viewSettings(v){
     <div class="row" style="margin-top:10px"><button id="sCal">Калібрувати октаву</button><span class="muted" id="sCalT">Зсув: ${Settings.offset} півтонів</span></div>
     <h3>Затримка</h3><p class="muted">Компенсує час між звуком і реакцією застосунку. «Виміряти» дає 8 клацань: грай коротку ноту точно на кожне.</p>
     <div class="row"><label>MIDI, мс <input type="number" id="sLm" value="${Settings.latMidi}"></label><label>Мікрофон, мс <input type="number" id="sLa" value="${Settings.latAudio}"></label><button id="sLat">Виміряти</button><span class="muted" id="sLatT"></span></div>
+    <h3>Вивід звуку</h3><div class="row"><label class="muted">Пристрій <select id="sOut"><option value="">Типовий пристрій Windows</option></select></label><button id="sTest">Перевірити звук</button><span class="muted" id="sTestT"></span></div>
     <h3>Звук і аналіз</h3>
     <div class="row"><label>Камертон A4, Гц <input type="number" id="sA4" value="${Settings.a4}"></label><label>Діапазон pitch bend, півтонів <input type="number" id="sBr" value="${Settings.bendRange}"></label><label>Поріг тиші, дБ <input type="number" id="sGate" value="${Settings.gate}"></label><label>Гучність метронома <input type="number" id="sMv" step="0.1" min="0" max="1" value="${Settings.metroVol}"></label></div>
     <div class="row" style="margin-top:8px"><label><input type="checkbox" id="sGuide"> звук-підказка у вправах за замовчуванням</label><label class="muted" style="margin-left:14px"><input type="checkbox" id="sRecMix" ${Settings.recMix!==false?'checked':''}> записувати разом із супроводом</label></div></div>
@@ -394,6 +395,10 @@ function viewSettings(v){
     ['dRem','dRemT','dAuto','dCl'].forEach(id=>$(id).onchange = sc); }
   if($('sRecMix')) $('sRecMix').onchange = e=>{ Settings.recMix = e.target.checked; saveSettings(); };
   $('sReal').onchange = e=>{ Settings.realistic = e.target.checked; saveSettings(); };
+  audioOutputs().then(ds=>{ const sel = $('sOut'); if(!sel) return; ds.filter(d=>d.deviceId && d.deviceId!=='default').forEach(d=>{ const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || 'Пристрій '+d.deviceId.slice(0,6); sel.appendChild(o); }); sel.value = Settings.sinkId || ''; });
+  $('sOut').onchange = async e=>{ const ok = await setOutput(e.target.value); $('sTestT').textContent = ok ? 'Пристрій змінено. Натисни «Перевірити звук».' : 'Не вдалося перемкнути пристрій.'; };
+  $('sTest').onclick = async ()=>{ $('sTestT').textContent = 'Граю три ноти…'; const r = await soundTest();
+    $('sTestT').textContent = r.peak > 0.01 ? `Застосунок відтворює звук (рівень ${r.peak}, ${r.rate} Гц, затримка ${r.latency} мс, вивід: ${r.sink}). Якщо не чути, вибери інший пристрій вище або перевір мікшер гучності Windows.` : `Звуку немає всередині застосунку: стан аудіо «${r.state}». Перезапусти застосунок і повідом про це.`; };
   $('sUnl').onchange = e=>{ Settings.unlockAll = e.target.checked; saveSettings(); };
   $('sReset').onclick = ()=>{ if(confirm('Скинути весь прогрес уроків і статистику?')){ Progress.lessons = {}; Progress.days = {}; Progress.wrong = {}; Progress.log = []; saveProgress(); go('settings'); } };
   $('sExp').onclick = ()=>{ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({progress:Progress, settings:Settings, songs:LS.get('songs',[])}, null, 1)], {type:'application/json'})); a.download = 'ewi-progress.json'; a.click(); };

@@ -10,7 +10,7 @@ async function sfLoad(inst){
   const file = SF_FILES[inst]; if(!file) return;
   SF.loading[inst] = (async()=>{
     let txt = null;
-    for(const base of (DESKTOP ? ['soundfonts/', SF_CDN] : [SF_CDN])){
+    for(const base of (DESKTOP ? ['ewimedia://app/soundfonts/', SF_CDN] : [SF_CDN])){
       try{ const r = await fetch(base + file + '-mp3.js'); if(r.ok){ txt = await r.text(); break; } }catch(e){}
     }
     if(!txt) throw new Error('не вдалося завантажити '+file);
