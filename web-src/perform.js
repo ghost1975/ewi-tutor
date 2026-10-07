@@ -30,13 +30,13 @@ function viewPerform(v, p){
   const stopRun = () => { if(!run) return; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); $('pfGo').textContent = '▶ Грати'; document.querySelectorAll('.pf-row.on').forEach(x=>x.classList.remove('on')); curRow = -1; };
   $('pfGo').onclick = () => { if(run){ stopRun(); return; }
     const bpm = clamp(+$('pfBpm').value || p.bpm || 80, 30, 260);
-    run = schedule({bpm, beats, countIn:1, totalBeats:total, seq:FULL, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup:PICK0,
+    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:FULL, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup:PICK0,
       backing: $('pfBack2') && $('pfBack2').checked ? {chords:p.chords, style:p.style} : null, tracks: p.tracks && p.tracks.length ? {list:p.tracks, muted:ex.muted||p.tracks.map(()=>false)} : null});
     if(p.audio && $('pfMinus') && $('pfMinus').checked) MinusAudio.startAt(p.audio, run.t0Perf, 0, bpm);
     if($('pfRec').checked && !recStart(p.title+' · виступ · '+bpm+' bpm')) toast('Для запису увімкни мікрофон угорі.');
     $('pfGo').textContent = '■ Стоп'; };
   const stopLoop = loopFrames(t=>{ if(!run) return; const beat = (t - run.t0Perf)/run.spbMs;
-    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0) return;
+    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil(-beat*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
     let r = rows.findIndex(x=>beat >= x.sB && beat < x.eB); if(r < 0) return;
     if(r !== curRow){ if(curRow>=0) $('pfr'+curRow).classList.remove('on'); $('pfr'+r).classList.add('on'); curRow = r;
       const el = $('pfr'+r), box = document.fullscreenElement ? $('pf') : null, top = el.getBoundingClientRect().top;

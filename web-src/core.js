@@ -328,3 +328,10 @@ async function toMp3(url, kbps=192){
   const end = enc.flush(); if(end.length) out.push(new Uint8Array(end));
   return new Blob(out, {type:'audio/mpeg'});
 }
+
+// ---------- Відлік перед вступом ----------
+// скільки тактів рахунку дати перед грою, щоб було щонайменше Settings.countInSec секунд (за замовчуванням 5)
+function countInBars(bpm, beats){ const secs = Settings.countInSec ?? 5; if(!(secs > 0)) return 1; return Math.max(1, Math.ceil(secs / (beats*60/bpm) - 1e-6)); }
+// текст відліку: секунди до вступу і поточна доля такту
+function countdownText(beat, spbMs, beats){ const left = Math.ceil(-beat*spbMs/1000), inBar = ((Math.floor(beat) % beats) + beats) % beats + 1;
+  return { secs: left, text: `Вступ через ${left} с · ${Array.from({length:beats},(_,i)=>i+1===inBar?'<'+(i+1)+'>':i+1).join(' ').replace(/<(\d)>/,'[$1]')}` }; }

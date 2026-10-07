@@ -149,12 +149,13 @@ function runNotes(box, ex, ctx){
   const stopPlay = () => { if(!playing) return; playing.h.stop(); playing.timers.forEach(clearTimeout); playing = null; playIdx = -1; P.play.textContent = '▶ Програти'; render(); };
   P.play.onclick = () => { if(playing){ stopPlay(); return; }
     const bpm = Math.min(240, Math.max(30, +P.bpm.value || ex.playBpm || 80)), total = pItems.reduce((a,b)=>a+b.d,0);
-    const h = schedule({bpm, beats:ex.beats||4, countIn:0, totalBeats:total, seq:pItems, guide:true, swing:ex.swing, clickOn:false,
+    const h = schedule({bpm, beats:ex.beats||4, countIn:countInBars(bpm, ex.beats||4), totalBeats:total, seq:pItems, guide:true, swing:ex.swing, clickOn:false,
       backing: P.back && P.back.checked ? {chords:ex.playChords, style:ex.playStyle} : null, tracks: ex.tracks && ex.tracks.length ? {list:ex.tracks, muted:ex.muted} : null});
     playing = {h, timers:[]}; P.play.textContent = '■ Стоп'; setTimeout(()=>{ if(ac().state !== 'running') toast('Аудіо не запустилось. Відкрий Налаштування → «Перевірити звук».'); }, 600);
     let b = 0, k = 0; const delay = h.t0Perf - now();
     pItems.forEach(it=>{ if(it.n!=null){ const idx = k++; playing.timers.push(setTimeout(()=>{ playIdx = idx; render(); }, delay + swingPos(b, ex.swing)*h.spbMs)); } b += it.d; });
     playing.timers.push(setTimeout(stopPlay, h.endPerf - now() + 150));
+    const cdTick = () => { if(!playing || playing.h!==h) return; const b = (now() - h.t0Perf)/h.spbMs; if(b < 0){ const cd = countdownText(b, h.spbMs, ex.beats||4); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + withKeys(items[0].n)); requestAnimationFrame(cdTick); } else setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); }; cdTick();
     setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); render(); };
   setHint(R, 'Грай ноти по черзі у своєму темпі. Наступна з\'явиться після правильної.');
   render();
@@ -246,7 +247,7 @@ function runRhythm(box, ex, ctx){
     if(run){ looping = false; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); C.go.textContent = 'Почати'; C.go.disabled = false; return; }
     const again = looping; applySection(); looping = !!(SEC && SEC.loop());
     bpm = clamp(+C.bpm.value||ex.bpm, 30, 260); C.bpm.value = bpm; if(!again) R.result.innerHTML=''; played = []; events = [];
-    run = schedule({bpm, beats, countIn:1, totalBeats:total, seq:items, guide:true, guideOn:C.guide.checked, swing:ex.swing, clickOn:C.click.checked, pickup, backing: C.back&&C.back.checked&&secChords ? {chords:secChords, style:ex.style} : null, tracks:trk()});
+    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:items, guide:true, guideOn:C.guide.checked, swing:ex.swing, clickOn:C.click.checked, pickup, backing: C.back&&C.back.checked&&secChords ? {chords:secChords, style:ex.style} : null, tracks:trk()});
     if(ex.audio && (!C.minus || C.minus.checked)) MinusAudio.startAt(ex.audio, run.t0Perf, secStart, bpm);
     C.go.textContent = '■ Стоп'; if(C.rec.checked) recStart(ex.title+' · '+bpm+' bpm');
   }
@@ -259,7 +260,7 @@ function runRhythm(box, ex, ctx){
     R.cvval.textContent = Live.breath;
     if(!run){ drawTrace(R.cv, {hist:br.hist, events}); return; }
     const beat = (t - run.t0Perf)/run.spbMs;
-    if(beat < 0){ const c = Math.floor(beats + beat)+1; setHint(R, 'Рахунок: '+Array.from({length:beats},(_,i)=>i<c?i+1:'·').join(' ')); }
+    if(beat < 0){ const cd = countdownText(beat, run.spbMs, beats); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + (items.find(i=>i.n!=null) ? withKeys(items.find(i=>i.n!=null).n) : '')); }
     else if(beat < total){ const x = layout.beatToX(beat), cur = box.querySelector('#cursor'); if(cur){ cur.setAttribute('x1',x); cur.setAttribute('x2',x); } scrollStaff(R.staff, x);
       let p=0; for(const it of items){ if(beat < p+it.d){ if(it.n!=null) setFocus(R, it.n); break; } p+=it.d; } setHint(R,''); }
     const bt = []; for(let b=0;b<=total;b++) bt.push(run.t0Perf + b*run.spbMs);
@@ -320,14 +321,14 @@ function runDyn(box, ex, ctx){
   const shape = x => ex.shape==='cresc' ? lo+(hi-lo)*x : ex.shape==='dim' ? hi-(hi-lo)*x : ex.shape==='swell' ? lo+(hi-lo)*(1-Math.abs(2*x-1)) : ex.shape==='terrace' ? [lo, (lo+hi)/2, hi, (lo+hi)/2][Math.min(3,Math.floor(x*4))] : (lo+hi)/2;
   setHint(R, 'Після такту рахунку грай ноту і веди лінію дихання по пунктиру.');
   const br = breathRecorder(); let run = null, notesOk = 0, notesAll = 0;
-  go.onclick = () => { R.result.innerHTML=''; notesOk = notesAll = 0; run = schedule({bpm, beats:4, countIn:1, totalBeats:beats}); go.disabled = true; };
+  go.onclick = () => { R.result.innerHTML=''; notesOk = notesAll = 0; run = schedule({bpm, beats:4, countIn:countInBars(bpm, 4), totalBeats:beats}); go.disabled = true; };
   const off = listen((type,d)=>{ if(run && type==='on' && d.t > run.t0Perf - 300){ notesAll++; if(matchNote(d.n, n).ok) notesOk++; } });
   const stopLoop = loopFrames(t=>{
     R.cvval.textContent = Live.breath;
     if(!run){ drawTrace(R.cv, {hist:br.hist}); return; }
     const dur = beats*run.spbMs, target = []; for(let i=0;i<=60;i++){ const x=i/60; target.push({t:run.t0Perf + x*dur, v:shape(x)}); }
     drawTrace(R.cv, {hist:br.hist, target, t0:run.t0Perf - 4*run.spbMs, t1:run.t0Perf + dur + 200});
-    const beat = (t-run.t0Perf)/run.spbMs; if(beat<0) setHint(R, 'Рахунок: '+(Math.floor(4+beat)+1)); else if(beat<beats) setHint(R, ex.shape==='cresc'?'Посилюй…':ex.shape==='dim'?'Стишуй…':'Веди по пунктиру…');
+    const beat = (t-run.t0Perf)/run.spbMs; if(beat<0){ const cd = countdownText(beat, run.spbMs, 4); R.big.textContent = cd.secs; setHint(R, cd.text); } else if(beat<beats) setHint(R, ex.shape==='cresc'?'Посилюй…':ex.shape==='dim'?'Стишуй…':'Веди по пунктиру…');
     if(t > run.t0Perf + dur + 300){
       const r = run; run = null; go.disabled = false;
       const xs = br.hist.filter(h=>h.t>=r.t0Perf+150 && h.t<=r.t0Perf+dur);
@@ -420,14 +421,14 @@ function runImprov(box, ex, ctx){
   setHint(R, 'Над стан виписано звукоряд. Грай фрази тільки з цих нот, залишай паузи між ними.');
   const br = breathRecorder(); let run = null, played = [];
   C.go.onclick = () => { R.result.innerHTML=''; played=[]; const bpm = +C.bpm.value||ex.bpm;
-    run = schedule({bpm, beats, countIn:1, totalBeats:total, drone: chords?null:parseNote(ex.drone).midi, chords:chordSeq, clickOn:true}); C.go.disabled = true; };
+    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, drone: chords?null:parseNote(ex.drone).midi, chords:chordSeq, clickOn:true}); C.go.disabled = true; };
   const off = listen((type,d)=>{ if(run && type==='on' && d.t >= run.t0Perf-100) played.push({n:d.n-Settings.offset, t:d.t}); });
   const stopLoop = loopFrames(t=>{
     R.cvval.textContent = Live.breath;
     if(!run){ drawTrace(R.cv, {hist:br.hist}); return; }
     const beat = (t-run.t0Perf)/run.spbMs;
     drawTrace(R.cv, {hist:br.hist, events:played.map(p=>({t:p.t, ok:pcs.has(pc(p.n))}))});
-    if(beat<0) setHint(R, 'Рахунок: '+(Math.floor(beats+beat)+1));
+    if(beat<0){ const cd = countdownText(beat, run.spbMs, beats); setHint(R, cd.text); }
     else if(beat<total){ if(chordSeq){ let p=0; for(const c of chordSeq){ if(beat<p+c.beats){ R.big.textContent = c.name; R.keys.textContent = 'звуки акорду: '+c.tones.map(x=>NAMES[x]).join(' '); break; } p+=c.beats; } }
       else setHint(R, `Такт ${Math.floor(beat/beats)+1} з ${bars}`); }
     if(t > run.endPerf + 400){ const r = run; run = null; C.go.disabled = false; evaluate(r); }

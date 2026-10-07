@@ -360,6 +360,7 @@ function viewSettings(v){
     <div class="row" style="margin-top:10px"><button id="sCal">Калібрувати октаву</button><span class="muted" id="sCalT">Зсув: ${Settings.offset} півтонів</span></div>
     <h3>Затримка</h3><p class="muted">Компенсує час між звуком і реакцією застосунку. «Виміряти» дає 8 клацань: грай коротку ноту точно на кожне.</p>
     <div class="row"><label>MIDI, мс <input type="number" id="sLm" value="${Settings.latMidi}"></label><label>Мікрофон, мс <input type="number" id="sLa" value="${Settings.latAudio}"></label><button id="sLat">Виміряти</button><span class="muted" id="sLatT"></span></div>
+    <h3>Відлік перед грою</h3><div class="row"><label class="muted">Рахунок метронома перед вступом, щонайменше <input type="number" id="sCnt" min="0" max="20" value="${Settings.countInSec ?? 5}" style="width:60px"> с</label><span class="muted">0 означає один такт.</span></div>
     <h3>Вивід звуку</h3><div class="row"><label class="muted">Пристрій <select id="sOut"><option value="">Типовий пристрій Windows</option></select></label><button id="sTest">Перевірити звук</button><span class="muted" id="sTestT"></span></div>
     <h3>Звук і аналіз</h3>
     <div class="row"><label>Камертон A4, Гц <input type="number" id="sA4" value="${Settings.a4}"></label><label>Діапазон pitch bend, півтонів <input type="number" id="sBr" value="${Settings.bendRange}"></label><label>Поріг тиші, дБ <input type="number" id="sGate" value="${Settings.gate}"></label><label>Гучність метронома <input type="number" id="sMv" step="0.1" min="0" max="1" value="${Settings.metroVol}"></label></div>
@@ -399,6 +400,7 @@ function viewSettings(v){
   $('sOut').onchange = async e=>{ const ok = await setOutput(e.target.value); $('sTestT').textContent = ok ? 'Пристрій змінено. Натисни «Перевірити звук».' : 'Не вдалося перемкнути пристрій.'; };
   $('sTest').onclick = async ()=>{ $('sTestT').textContent = 'Граю три ноти…'; const r = await soundTest();
     $('sTestT').textContent = r.peak > 0.01 ? `Застосунок відтворює звук (рівень ${r.peak}, ${r.rate} Гц, затримка ${r.latency} мс, вивід: ${r.sink}). Якщо не чути, вибери інший пристрій вище або перевір мікшер гучності Windows.` : `Звуку немає всередині застосунку: стан аудіо «${r.state}». Перезапусти застосунок і повідом про це.`; };
+  $('sCnt').onchange = e=>{ Settings.countInSec = clamp(+e.target.value||0, 0, 20); saveSettings(); };
   $('sUnl').onchange = e=>{ Settings.unlockAll = e.target.checked; saveSettings(); };
   $('sReset').onclick = ()=>{ if(confirm('Скинути весь прогрес уроків і статистику?')){ Progress.lessons = {}; Progress.days = {}; Progress.wrong = {}; Progress.log = []; saveProgress(); go('settings'); } };
   $('sExp').onclick = ()=>{ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({progress:Progress, settings:Settings, songs:LS.get('songs',[])}, null, 1)], {type:'application/json'})); a.download = 'ewi-progress.json'; a.click(); };
