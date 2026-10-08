@@ -8,6 +8,8 @@ function dailyPlan(){
     steps.push({title:'Повторення проблемних нот', min:3, why:'Ноти, на яких ти найчастіше помиляєшся: '+weak.map(w=>withKeys(parseNote(w).midi)).join(', ')+'.',
       ex:{type:'notes', title:'Проблемні ноти', how:'Кожну проблемну ноту чергуєш з опорною.', seq:seq.join(' '), pass:85}}); }
   else steps.push({title:'Хроматика', min:3, why:'Помилок поки мало, тож тренуємо всі півтони.', ex:{type:'notes', title:'Хроматична гама', how:'Вгору і вниз.', seq:'D4 Eb4 E4 F4 F#4 G4 G#4 A4 Bb4 B4 C5 C#5 D5 C#5 C5 B4 Bb4 A4 G#4 G4 F#4 F4 E4 Eb4 D4', pass:80}});
+  const tw = transStats(5).filter(r=>r.rate > 0.1)[0];
+  if(tw) steps.push({title:`Перехід ${pcName(tw.a)} → ${pcName(tw.b)}`, min:2, why:`На цьому переході ${Math.round(tw.rate*100)}% разів проскакує проміжна нота: ${transTip(tw.a, tw.b)}.`, ex:transDrill(tw.a, tw.b)});
   const done = LESSONS.filter(lessonDone).length;
   steps.push({title:'Читання нот', min:3, why:'Швидкість реакції: бачиш ноту — граєш.', reading:{range: done < 8 ? 'base' : done < 20 ? 'two' : 'wide', acc: done >= 10, count:12, hint:true}});
   const l = nextLesson();
@@ -45,8 +47,10 @@ function viewDaily(v){
   function finish(){ const min = Math.round((now()-t0)/60000); Progress.daily = Progress.daily || {}; Progress.daily[today()] = {min, steps:steps.length, done:results.filter(x=>x!=null).length}; saveProgress(); checkBadges();
     $('dWhy').textContent = ''; $('dBox').innerHTML = `<div class="result pass"><div><span class="score">Готово</span><span class="muted"> · ${min} хв</span></div>
       <table class="fing">${steps.map((s,i)=>`<tr><td>${esc(s.title)}</td><td>${results[i]!=null?results[i]:'пропущено'}</td></tr>`).join('')}</table>
+      <textarea class="report" id="dJ" style="min-height:60px;margin-top:10px" placeholder="Нотатка до заняття: що вийшло, що заважало…"></textarea>
       <div class="row" style="margin-top:8px"><button class="primary" id="dT">Розбір з вчителем</button><button id="dP">До програми</button></div></div>`;
-    $('dT').onclick = ()=>go('teacher'); $('dP').onclick = ()=>go('program'); }
+    const saveJ = () => { const tx = $('dJ') && $('dJ').value.trim(); if(tx){ journalAdd(tx); $('dJ').value = ''; } };
+    $('dT').onclick = ()=>{ saveJ(); go('teacher'); }; $('dP').onclick = ()=>{ saveJ(); go('program'); }; }
   $('dSkip').onclick = () => step(k+1);
   step(0);
   UI.cleanup = () => { if(stop) stop(); clearInterval(clock); };

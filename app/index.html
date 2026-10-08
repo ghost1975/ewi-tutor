@@ -155,6 +155,20 @@ textarea.report{width:100%;min-height:160px;background:var(--surface);border:1px
 .lesson-btn .mini i{display:block;height:100%;background:var(--brass)}
 .here-call{border-left-color:var(--brass)}
 
+.view-toggle{display:flex;gap:6px;align-items:center;margin:0 0 6px}
+.view-toggle button{padding:4px 12px;font-size:13px;border-radius:999px}
+.view-toggle button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.as-roll{overflow:hidden!important}
+canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface)}
+.meter{display:inline-block;width:160px;height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--brass)}
+.practice-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.practice-bar .sp{flex:1}
+.practice-bar button{padding:5px 12px;font-size:13px}
+.practice-bar button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.pb-note{margin:-4px 0 10px}
+.panel.stopped{text-align:center;padding:28px}
+
 </style>
 </head>
 <body>
@@ -234,8 +248,9 @@ const hz2midi = hz => 69 + 12*Math.log2(hz/Settings.a4);
 const midi2hz = m => Settings.a4 * Math.pow(2,(m-69)/12);
 
 // ---------- Шина подій вводу ----------
-const Hub = { subs:new Set(), on(f){ this.subs.add(f); return ()=>this.subs.delete(f); },
-  emit(type, d){ this.subs.forEach(f=>{ try{ f(type,d); }catch(e){ console.error(e); } }); } };
+// paused: під час паузи вправи гра на інструменті не зараховується (ноти й дихання не доходять до вправ)
+const Hub = { subs:new Set(), paused:false, on(f){ this.subs.add(f); return ()=>this.subs.delete(f); },
+  emit(type, d){ if(this.paused && (type==='on' || type==='off' || type==='breath')) return; this.subs.forEach(f=>{ try{ f(type,d); }catch(e){ console.error(e); } }); } };
 const Live = { breath:0, breathSrc:'', note:null, cents:null, hz:0, db:-100, lastMidiNote:0, lastMidiBreath:0,
   midiNames:[], micOn:false, vib:null, centroid:0, activity:0 };
 
@@ -256,6 +271,7 @@ function onMidi(e){
   const [st,d1,d2] = e.data, type = st & 0xf0, t = now() - Settings.latMidi;
   if(type===0x90 && d2>0){ Live.lastMidiNote = t; if(useMidiNotes()) emitNoteOn(d1, t, 'midi'); }
   else if(type===0x80 || (type===0x90 && d2===0)){ if(useMidiNotes()) emitNoteOff(d1, t, 'midi'); }
+  if(type===0xB0) Hub.emit('cc', {num:d1, v:d2, t});
   else if(type===0xB0 && (d1===2||d1===11||d1===7)){ midiSeen['cc'+d1]=1; if(d1===2 || (!midiSeen.cc2 && (d1===11 || !midiSeen.cc11))) emitBreath(d2, t, 'midi'); }
   else if(type===0xD0){ midiSeen.at=1; if(!midiSeen.cc2 && !midiSeen.cc11) emitBreath(d1, t, 'midi'); }
   else if(type===0xE0){ const v = (d2<<7)|d1; Hub.emit('bend', {cents:(v-8192)/8192*Settings.bendRange*100, t}); }
@@ -496,6 +512,11 @@ function countInBars(bpm, beats){ const secs = Settings.countInSec ?? 5; if(!(se
 // текст відліку: секунди до вступу і поточна доля такту
 function countdownText(beat, spbMs, beats){ const left = Math.ceil(-beat*spbMs/1000), inBar = ((Math.floor(beat) % beats) + beats) % beats + 1;
   return { secs: left, text: `Вступ через ${left} с · ${Array.from({length:beats},(_,i)=>i+1===inBar?'<'+(i+1)+'>':i+1).join(' ').replace(/<(\d)>/,'[$1]')}` }; }
+
+// спільні помічники, потрібні вже під час першого показу програми
+var TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
+function totalMin(){ return Object.values(Progress.days||{}).reduce((a,b)=>a+b,0); }
+function songsPassed(){ return Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length; }
 
 // ---------- Реалістичні інструменти: семпли Fluid R3 GM (CC BY 3.0) через midi-js-soundfonts ----------
 // Настільна версія бере файли з папки soundfonts поруч зі сторінкою, браузерна — з CDN.
@@ -750,10 +771,109 @@ const MediaStore = {
   db(){ return this._db || (this._db = new Promise((res, rej)=>{ const r = indexedDB.open('ewi-media', 1); r.onupgradeneeded = ()=>r.result.createObjectStore('f'); r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error); })); },
   async put(name, blob){ if(DESKTOP) return window.ewiStore.saveMedia(name, new Uint8Array(await blob.arrayBuffer()));
     const db = await this.db(); await new Promise((res, rej)=>{ const tx = db.transaction('f','readwrite'); tx.objectStore('f').put(blob, name); tx.oncomplete = res; tx.onerror = ()=>rej(tx.error); }); return name; },
+  async pick(a){ return a && a.semis && a.tfile ? a.tfile : a && a.file; },
   async url(name){ if(!name) return null; if(DESKTOP) return 'ewimedia://rep/' + encodeURIComponent(name);
     const db = await this.db(); const blob = await new Promise(res=>{ const r = db.transaction('f').objectStore('f').get(name); r.onsuccess = ()=>res(r.result); r.onerror = ()=>res(null); });
     return blob ? URL.createObjectURL(blob) : null; }
 };
+
+// ---------- Вигляд нот: нотний стан або нотна стрічка ----------
+const isRoll = () => Settings.view === 'roll' || Settings.view === 'tape';
+const VIEW_NAMES = { staff:'Нотний стан', roll:'Стрічка: падаючі ноти', tape:'Стрічка: горизонтальна' };
+// Нотна стрічка: ноти падають згори до лінії гри; кожна смуга — висота звуку, на блоці назва і клавіші
+function mountRoll(host, items, o={}){
+  host.innerHTML = `<canvas class="roll" style="height:${o.height||320}px"></canvas>`; host.classList.add('as-roll');
+  const cv = host.querySelector('canvas'), rhythmic = !!o.rhythmic, beats = o.beats||4, pickup = o.pickup||0;
+  const starts = []; let cum = 0; items.forEach((it,i)=>{ starts.push(rhythmic ? cum : i); cum += rhythmic ? it.d : 1; });
+  const total = cum, notes = items.map((it,i)=>({it, i, s:starts[i], d: rhythmic ? it.d : 0.86})).filter(x=>x.it.n!=null);
+  const ns = notes.map(x=>x.it.n), lo = Math.min(...ns, 67) - 1, hi = Math.max(...ns, 67) + 1;
+  let cursor = 0, marks = o.marks || [];
+  const chords = o.chordLabels || [];
+  function draw(){
+    const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight; if(!W) return;
+    if(cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)){ cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+    const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
+    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const C = { ink:css('--ink'), muted:css('--muted'), line:css('--line'), surface:css('--surface'), brass:css('--brass'), ok:css('--ok'), bad:css('--bad'), warn:css('--warn')||css('--brass') };
+    if(Settings.view === 'tape'){ drawTape(g, W, H, C); return; }
+    const left = 34, lanes = hi - lo + 1, lw = (W - left - 8) / lanes, hitY = H - 40, ppb = rhythmic ? 64 * (Settings.rollZoom || 1) : 58;
+    const X = n => left + (n - lo) * lw, Y = b => hitY - (b - cursor) * ppb;
+    // смуги: чорні клавіші трохи темніші, підписи нот унизу
+    for(let n=lo; n<=hi; n++){ if([1,3,6,8,10].includes(pc(n))){ g.fillStyle = C.line; g.globalAlpha = 0.35; g.fillRect(X(n), 0, lw, hitY); g.globalAlpha = 1; } }
+    // долі й такти
+    if(rhythmic){ for(let b = Math.floor(cursor - 2); b < cursor + hitY/ppb + 1; b++){ if(b < 0 || b > total) continue; const y = Y(b), bar = (b - pickup) % beats === 0 || b === 0;
+      g.strokeStyle = C.line; g.lineWidth = bar ? 1.6 : 0.6; g.beginPath(); g.moveTo(left, y); g.lineTo(W-8, y); g.stroke();
+      if(bar){ g.fillStyle = C.muted; g.font = '10px sans-serif'; g.textAlign = 'right'; g.fillText(String(Math.floor((b - pickup)/beats) + (pickup?2:1)), left - 4, y + 3); } } }
+    chords.forEach(c=>{ const y = Y(c.b); if(y < 10 || y > hitY) return; g.fillStyle = C.brass; g.font = 'bold 12px sans-serif'; g.textAlign = 'left'; g.fillText(c.name, left + 2, y - 3); });
+    // ноти
+    notes.forEach(x=>{ const yb = Y(x.s), yt = Y(x.s + x.d) + 2; if(yb < -5 || yt > hitY + 30) return;
+      const m = marks[x.i] || {}, curNow = cursor >= x.s && cursor < x.s + (rhythmic ? x.d : 1);
+      const col = m.cls==='ok' ? C.ok : m.cls==='bad' ? C.bad : m.cls==='warn' ? C.warn : (m.cls==='cur' || curNow) ? C.brass : C.ink;
+      const past = !m.cls && x.s + x.d < cursor - 0.01;
+      g.globalAlpha = past ? 0.3 : 1; g.fillStyle = col; const bx = X(x.it.n) + 2, bw = Math.max(8, lw - 4), bh = Math.max(10, yb - yt);
+      g.beginPath(); g.roundRect ? g.roundRect(bx, yb - bh, bw, bh, 5) : g.rect(bx, yb - bh, bw, bh); g.fill();
+      g.fillStyle = '#fff'; g.textAlign = 'center'; const cx = bx + bw/2, p = parseNote(x.it.s), nm = p.letter + (p.acc==='#'?'♯':p.acc==='b'?'♭':'');
+      if(bh >= 16){ g.font = `bold ${Math.min(14, Math.max(10, lw*0.32))}px sans-serif`; g.fillText(nm, cx, yb - bh + 13); }
+      if(Settings.rollKeys !== false && bh >= 34 && lw >= 30){ g.font = `${Math.min(11, Math.max(8, lw*0.22))}px sans-serif`; keysShort(x.it.n).slice(0,2).forEach((t,k)=>g.fillText(t, cx, yb - bh + 26 + k*11)); }
+      g.globalAlpha = 1; });
+    // лінія гри
+    g.strokeStyle = C.brass; g.lineWidth = 3; g.beginPath(); g.moveTo(left, hitY); g.lineTo(W-8, hitY); g.stroke();
+    g.fillStyle = C.muted; g.font = '10px sans-serif'; g.textAlign = 'center';
+    for(let n=lo; n<=hi; n++) if(ns.includes(n)) g.fillText(pcName(n), X(n) + lw/2, hitY + 16);
+  }
+  // горизонтальна стрічка: висота звуку — по вертикалі, час іде справа наліво до лінії гри
+  function drawTape(g, W, H, C){
+    const top = 22, bottom = H - 8, left = 40, lanes = hi - lo + 1, lh = (bottom - top) / lanes, hitX = left + 90, ppb = rhythmic ? 90 * (Settings.rollZoom || 1) : 80;
+    const Y = n => bottom - (n - lo + 1) * lh, X = b => hitX + (b - cursor) * ppb;
+    for(let n=lo; n<=hi; n++){ if([1,3,6,8,10].includes(pc(n))){ g.fillStyle = C.line; g.globalAlpha = 0.35; g.fillRect(left, Y(n), W - left, lh); g.globalAlpha = 1; }
+      if(ns.includes(n)){ g.fillStyle = C.muted; g.font = '10px sans-serif'; g.textAlign = 'right'; g.fillText(pcName(n), left - 4, Y(n) + lh/2 + 3); } }
+    if(rhythmic){ for(let b = Math.floor(cursor - hitX/ppb) - 1; b < cursor + (W - hitX)/ppb + 1; b++){ if(b < 0 || b > total) continue; const x = X(b), bar = (b - pickup) % beats === 0 || b === 0;
+      g.strokeStyle = C.line; g.lineWidth = bar ? 1.6 : 0.6; g.beginPath(); g.moveTo(x, top); g.lineTo(x, bottom); g.stroke();
+      if(bar){ g.fillStyle = C.muted; g.font = '10px sans-serif'; g.textAlign = 'center'; g.fillText(String(Math.floor((b - pickup)/beats) + (pickup?2:1)), x, top - 8); } } }
+    chords.forEach(c=>{ const x = X(c.b); if(x < left || x > W) return; g.fillStyle = C.brass; g.font = 'bold 12px sans-serif'; g.textAlign = 'left'; g.fillText(c.name, x + 3, top + 2); });
+    g.save(); g.beginPath(); g.rect(left, 0, W - left, H); g.clip();
+    notes.forEach(x=>{ const xl = X(x.s), xr = X(x.s + x.d) - 2; if(xr < left - 5 || xl > W + 5) return;
+      const m = marks[x.i] || {}, curNow = cursor >= x.s && cursor < x.s + (rhythmic ? x.d : 1);
+      const col = m.cls==='ok' ? C.ok : m.cls==='bad' ? C.bad : m.cls==='warn' ? C.warn : (m.cls==='cur' || curNow) ? C.brass : C.ink;
+      const past = !m.cls && x.s + x.d < cursor - 0.01, bw = Math.max(10, xr - xl), by = Y(x.it.n) + 1, bh = Math.max(8, lh - 2);
+      g.globalAlpha = past ? 0.3 : 1; g.fillStyle = col; g.beginPath(); g.roundRect ? g.roundRect(xl, by, bw, bh, 5) : g.rect(xl, by, bw, bh); g.fill();
+      g.fillStyle = '#fff'; g.textAlign = 'left'; const p = parseNote(x.it.s), nm = p.letter + (p.acc==='#'?'♯':p.acc==='b'?'♭':''), fs = Math.min(13, Math.max(9, bh*0.6));
+      g.save(); g.beginPath(); g.rect(xl, by, bw, bh); g.clip(); const tx = Math.max(xl, left) + 4;
+      if(bw >= 16){ g.font = `bold ${fs}px sans-serif`; g.fillText(nm, tx, by + bh/2 + fs*0.35); }
+      if(Settings.rollKeys !== false && bw >= 50){ g.font = `${Math.max(8, fs-2)}px sans-serif`; g.fillText(keysShort(x.it.n).join(' '), tx + fs*1.4, by + bh/2 + fs*0.32); }
+      g.restore(); g.globalAlpha = 1; });
+    g.restore();
+    g.strokeStyle = C.brass; g.lineWidth = 3; g.beginPath(); g.moveTo(hitX, top - 4); g.lineTo(hitX, bottom); g.stroke();
+  }
+  draw(); const ro = new ResizeObserver(draw); ro.observe(cv);
+  return { kind:'roll', starts, update(b){ cursor = b; draw(); }, focusIndex(i){ cursor = starts[Math.max(0, Math.min(i, starts.length-1))] ?? 0; draw(); },
+    setMarks(m){ marks = m; draw(); }, beatToX(){ return 0; } };
+}
+// Єдиний інтерфейс для обох виглядів: update(beat) рухає курсор, focusIndex(i) показує ноту i
+function scoreView(host, items, o={}){
+  if(isRoll()) return mountRoll(host, items, o);
+  host.classList.remove('as-roll');
+  const lay = mountStaff(host, items, o);
+  if(o.chordLabels && o.chordLabels.length && o.rhythmic){ const svg = host.querySelector('svg');
+    if(svg) svg.insertAdjacentHTML('beforeend', o.chordLabels.map(c=>`<text x="${lay.beatToX(c.b)}" y="14" font-size="12" font-weight="700" fill="var(--brass)">${esc(c.name)}</text>`).join('')); }
+  return { kind:'staff', xs:lay.xs, beatToX:lay.beatToX,
+    update(b){ const x = lay.beatToX(b), cur = host.querySelector('#cursor'); if(cur){ cur.setAttribute('x1',x); cur.setAttribute('x2',x); } scrollStaff(host, x); },
+    focusIndex(i){ scrollStaff(host, lay.xs[Math.max(0, Math.min(i, lay.xs.length-1))]); }, setMarks(){} };
+}
+// Перемикач «Нотний стан / Стрічка» над нотами
+function viewToggle(host, onChange){
+  const el = document.createElement('div'); el.className = 'view-toggle';
+  const render = () => { const cur = Settings.view || 'staff';
+    el.innerHTML = Object.entries(VIEW_NAMES).map(([k,t])=>`<button data-v="${k}" aria-current="${k===cur}">${t}</button>`).join('')
+      + (isRoll() ? `<label class="muted">масштаб <input type="range" data-z min="0.5" max="2.5" step="0.1" value="${Settings.rollZoom||1}"></label><label class="muted"><input type="checkbox" data-k ${Settings.rollKeys!==false?'checked':''}> клавіші на нотах</label>` : '');
+    el.querySelectorAll('[data-v]').forEach(b=>b.onclick = ()=>{ Settings.view = b.dataset.v; saveSettings(); render(); onChange(); });
+    const z = el.querySelector('[data-z]'); if(z) z.oninput = () => { Settings.rollZoom = +z.value; saveSettings(); onChange(); };
+    const kk = el.querySelector('[data-k]'); if(kk) kk.onchange = () => { Settings.rollKeys = kk.checked; saveSettings(); onChange(); }; };
+  render(); host.before(el); return el;
+}
+// позиції акордів для підписів: "Am7:2 D7:2" → [{b:0,name:'Am7'},...]
+function chordLabelsOf(chords){ if(!chords || typeof chords !== 'string') return []; const out = []; let p = 0, last = '';
+  parseChords(chords).forEach(c=>{ if(c.name && c.name !== last) out.push({b:p, name:c.name}); last = c.name; p += c.beats; }); return out; }
 
 // ---------- Нотний стан (з ритмом) ----------
 const REST = {4:'𝄻',3:'𝄼',2:'𝄼',1.5:'𝄽',1:'𝄽',0.75:'𝄾',0.5:'𝄾',0.25:'𝄿'};
@@ -894,14 +1014,15 @@ function runNotes(box, ex, ctx){
   const pItems = ex.playSeq ? parseSeq(ex.playSeq) : items.map(i=>({...i, d:1}));
   const R = exShell(box, ex, `<button class="primary" data-p="play">▶ Програти</button>
     <label class="muted">Темп <input type="number" data-p="bpm" min="30" max="240" value="${ex.playBpm||80}" style="width:64px"></label>
-    ${ex.playChords?'<label class="muted"><input type="checkbox" data-p="back" checked> фонограма</label>':''}`);
+    ${ex.playChords?`<label class="muted"><input type="checkbox" data-p="back" ${ex.tracks&&ex.tracks.length?'':'checked'}> фонограма</label>`:''}`);
   const P = {}; box.querySelectorAll('[data-p]').forEach(x=>P[x.dataset.p]=x);
   trackChips(box.querySelector('.focus'), ex, ()=> playing ? playing.h.mix : null);
+  setTimeout(()=>viewToggle(R.staff, ()=>render()), 0);
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
-    const r = mountStaff(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); scrollStaff(R.staff, r.xs[at]);
+    const r = scoreView(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
     setFocus(R, playing ? (playIdx>=0 ? items[playIdx].n : null) : (pos<items.length?items[pos].n:null)); };
   const stopPlay = () => { if(!playing) return; playing.h.stop(); playing.timers.forEach(clearTimeout); playing = null; playIdx = -1; P.play.textContent = '▶ Програти'; render(); };
   P.play.onclick = () => { if(playing){ stopPlay(); return; }
@@ -931,15 +1052,16 @@ function runNotes(box, ex, ctx){
     showResult(R, {score, pass:ex.pass||80, advice: weak.length ? 'Повтори окремо: '+[...new Set(weak)].join(', ')+'.' : 'Усі ноти з першої спроби.',
       stats:[['з першої спроби', firstTry+'/'+items.length], ['помилок', misses], ['середня зміна ноти', avg?avg.toFixed(2)+' с':'—']]}, ctx);
   }
-  return ()=>{ stopPlay(); off(); br.off(); stopLoop(); };
+  const cleanup = ()=>{ stopPlay(); off(); br.off(); stopLoop(); }; cleanup.pause = () => { stopPlay(); return false; }; return cleanup;
 }
 
 // ---------- 2. Довгі ноти ----------
 function runLong(box, ex, ctx){
-  const items = parseSeq(ex.seq).filter(i=>i.n!=null), R = exShell(box, ex), band = ex.band||[55,95], hold = ex.hold||4;
+  const items = parseSeq(ex.seq).filter(i=>i.n!=null), R = exShell(box, ex), band = calBand(ex.band||[55,95]), hold = ex.hold||4;
   let pos = 0, holdStart = 0, samples = []; const stats = [], marks = items.map(()=>({})), events = []; const br = breathRecorder();
   R.barw.hidden = false;
-  const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); mountStaff(R.staff, items, {marks}); setFocus(R, pos<items.length?items[pos].n:null); };
+  const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); scoreView(R.staff, items, {marks}).focusIndex(pos); setFocus(R, pos<items.length?items[pos].n:null); };
+  viewToggle(R.staff, ()=>render());
   setHint(R, `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
   const off = listen((type,d)=>{
     if(pos>=items.length) return;
@@ -957,7 +1079,9 @@ function runLong(box, ex, ctx){
       const inBand = xs.length ? xs.filter(v=>v>=band[0]&&v<=band[1]).length/xs.length : 1;
       const stab = clamp(Math.round(100 - s*4 - (1-inBand)*45), 0, 100);
       stats.push(stab); marks[pos].cls = stab>=80?'ok':stab>=60?'warn':'bad'; marks[pos].top = String(stab);
-      setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}`, stab>=80?'ok':'warn');
+      const bc = Settings.biteCC != null && typeof CCMON !== 'undefined' ? CCMON[Settings.biteCC] : null, bh = bc ? bc.hist.filter(h=>h[0] > holdStart + 350).map(h=>h[1]) : [];
+      const biteSwing = bh.length > 3 ? Math.max(...bh) - Math.min(...bh) : 0;
+      setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}${biteSwing > 25 ? ' Прикус коливався: розслаб губи, не стискай мундштук.' : ''}`, stab>=80 && biteSwing <= 25 ?'ok':'warn');
       holdStart = 0; pos++; render(); if(pos>=items.length) finish();
     }
   });
@@ -975,7 +1099,7 @@ function runRhythm(box, ex, ctx){
   const R = exShell(box, ex, `
     <label class="muted">Темп <input type="number" data-c="bpm" min="30" max="260" value="${bpm}"></label>
     <label class="muted"><input type="checkbox" data-c="guide" ${Settings.guide?'checked':''}> мелодія-підказка</label>
-    ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.audio?'':'checked'}> фонограма</label>`:''}
+    ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.audio || (ex.tracks&&ex.tracks.length)?'':'checked'}> фонограма</label>`:''}
     ${ex.audio?`<label class="muted"><input type="checkbox" data-c="minus" checked> мінусовка</label>`:''}
     <label class="muted"><input type="checkbox" data-c="click" ${ex.chords && ex.style!=='classical' ? '' : 'checked'}> метроном</label>
     <label class="muted"><input type="checkbox" data-c="auto"> авто-темп</label>
@@ -985,28 +1109,38 @@ function runRhythm(box, ex, ctx){
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
   C.auto.checked = !!LS.get('auto.'+ex.key, false);
   const PICK0 = ex.pickup ?? pickupOf(ex.chords, beats); let pickup = PICK0;
-  let layout = mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup}); const br = breathRecorder();
+  const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, chordLabels: chordLabelsOf(secChords)});
+  let layout = scoreView(R.staff, items, vopts()); const br = breathRecorder();
+  viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); });
   let run = null, played = [], events = [], listenH = null;
   trackChips(box.querySelector('.focus'), ex, ()=> (run && run.mix) || (listenH && listenH.mix) || null);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   const trk = () => secTracks && secTracks.length ? {list:secTracks, muted:ex.muted} : null;
-  let looping = false;
-  function applySection(){ const s = SEC ? SEC.range() : null;
+  let looping = false, resumeRange = null, hadPause = false, pausedRange = null;
+  function applySection(){ const s = resumeRange || (SEC ? SEC.range() : null);
     if(!s){ items = FULL; total = FULL_TOTAL; secStart = 0; secChords = ex.chords; secTracks = ex.tracks; pickup = PICK0; }
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
-    layout = mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup}); }
+    layout = scoreView(R.staff, items, vopts()); }
   if(SEC) SEC.onChange = () => { if(!run) applySection(); };
   setFocus(R, items.find(i=>i.n!=null).n);
   setHint(R, ex.artic==='legato' ? 'Legato: не перериваєш повітря між нотами, міняєш лише пальці.' : ex.artic==='staccato' ? 'Staccato: коротка нота і пауза, кожну зупиняй язиком.' : 'Після одного такту рахунку грай разом із метрономом.');
   C.listen.onclick = () => { if(listenH){ listenH.stop(); MinusAudio.stop(); } if(!run) applySection(); listenH = (secChords || trk() || ex.audio) ? schedule({bpm:+C.bpm.value||ex.bpm, beats, countIn:0, totalBeats:total, seq:items, guide:true, swing:ex.swing, clickOn:false, backing: secChords && (!C.back || C.back.checked) ? {chords:secChords, style:ex.style} : null, tracks:trk()}) : playSeq(items, +C.bpm.value, {swing:ex.swing, stacc:ex.artic==='staccato'}); if(ex.audio && (!C.minus || C.minus.checked) && listenH.t0Perf) MinusAudio.startAt(ex.audio, listenH.t0Perf, secStart, +C.bpm.value||ex.bpm); };
   C.go.onclick = () => start();
+  // пауза: зупиняємо на поточному такті, продовжуємо з його початку після відліку
+  const BARS = barStartsOf(FULL_TOTAL, beats, PICK0);
+  function pause(){ if(!run) return false; const beat = Math.max(0, (now() - run.t0Perf)/run.spbMs), abs = secStart + Math.min(beat, total), end = secStart + total;
+    let b0 = BARS[0]; for(const b of BARS) if(b <= abs + 1e-6) b0 = b; if(b0 < secStart) b0 = secStart;
+    looping = false; run.stop(); run = null; MinusAudio.stop(); hadPause = true; pausedRange = b0 < end - 1e-6 ? [b0, end] : null;
+    const bar = BARS.indexOf(b0) + 1; C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
+  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; start(); return true; }
   function start(){
-    if(run){ looping = false; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); C.go.textContent = 'Почати'; C.go.disabled = false; return; }
-    const again = looping; applySection(); looping = !!(SEC && SEC.loop());
+    if(run){ pause(); return; }
+    if(pausedRange){ resume(); return; }
+    const again = looping; applySection(); resumeRange = null; looping = !!(SEC && SEC.loop()) && !hadPause;
     bpm = clamp(+C.bpm.value||ex.bpm, 30, 260); C.bpm.value = bpm; if(!again) R.result.innerHTML=''; played = []; events = [];
     run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:items, guide:true, guideOn:C.guide.checked, swing:ex.swing, clickOn:C.click.checked, pickup, backing: C.back&&C.back.checked&&secChords ? {chords:secChords, style:ex.style} : null, tracks:trk()});
     if(ex.audio && (!C.minus || C.minus.checked)) MinusAudio.startAt(ex.audio, run.t0Perf, secStart, bpm);
-    C.go.textContent = '■ Стоп'; if(C.rec.checked) recStart(ex.title+' · '+bpm+' bpm');
+    C.go.textContent = '⏸ Пауза'; if(C.rec.checked && !Rec.mr) recStart(ex.title+' · '+bpm+' bpm');
   }
   const off = listen((type,d)=>{
     if(!run) return;
@@ -1017,8 +1151,8 @@ function runRhythm(box, ex, ctx){
     R.cvval.textContent = Live.breath;
     if(!run){ drawTrace(R.cv, {hist:br.hist, events}); return; }
     const beat = (t - run.t0Perf)/run.spbMs;
-    if(beat < 0){ const cd = countdownText(beat, run.spbMs, beats); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + (items.find(i=>i.n!=null) ? withKeys(items.find(i=>i.n!=null).n) : '')); }
-    else if(beat < total){ const x = layout.beatToX(beat), cur = box.querySelector('#cursor'); if(cur){ cur.setAttribute('x1',x); cur.setAttribute('x2',x); } scrollStaff(R.staff, x);
+    if(beat < 0){ if(layout.kind==='roll') layout.update(beat); const cd = countdownText(beat, run.spbMs, beats); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + (items.find(i=>i.n!=null) ? withKeys(items.find(i=>i.n!=null).n) : '')); }
+    else if(beat < total){ layout.update(beat);
       let p=0; for(const it of items){ if(beat < p+it.d){ if(it.n!=null) setFocus(R, it.n); break; } p+=it.d; } setHint(R,''); }
     const bt = []; for(let b=0;b<=total;b++) bt.push(run.t0Perf + b*run.spbMs);
     drawTrace(R.cv, {hist:br.hist, events, beats:bt, t0:run.t0Perf - beats*run.spbMs, t1:run.endPerf + 300});
@@ -1034,7 +1168,7 @@ function runRhythm(box, ex, ctx){
       cnt++; let best = -1, bd = 1e9;
       played.forEach((p,j)=>{ if(used.has(j)) return; const dt = p.t-on; if(Math.abs(dt) < spb*0.5 && Math.abs(dt) < Math.abs(bd)){ bd = dt; best = j; } });
       if(best<0){ marks[i] = {cls:'bad', top:'пропущено'}; res.push(null); return; }
-      used.add(best); const p = played[best], m = matchNote(p.n, it.n), a = Math.abs(bd);
+      used.add(best); const p = played[best], m = ex.anyPitch ? {ok:true} : matchNote(p.n, it.n), a = Math.abs(bd);
       let s = m.ok ? (a<=tol?1:a<=tol*2?0.6:0.3) : 0.15; sum += s; if(m.ok) errs.push(bd); else { wrong.push(it.n); noteWrong(it.n); }
       marks[i] = {cls: !m.ok?'bad':a<=tol?'ok':'warn', top: m.ok ? (bd>=0?'+':'−')+Math.round(a) : pcName(p.n-Settings.offset)};
       res.push({p, on, it, i});
@@ -1052,7 +1186,7 @@ function runRhythm(box, ex, ctx){
           if(len <= a.it.d*spb*0.65 && (minB<20 || a.p.off)) good++; } }
       artic = tot ? good/tot*100 : 100; }
     const score = artic==null ? noteScore : noteScore*0.65 + artic*0.35;
-    mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup, marks});
+    layout = scoreView(R.staff, items, {...vopts(), marks}); layout.update(total);
     if(SEC) SEC.record(items, marks, secStart);
     const mErr = mean(errs), aErr = mean(errs.map(Math.abs));
     let advice = [];
@@ -1063,10 +1197,12 @@ function runRhythm(box, ex, ctx){
     const pass = ex.pass||75;
     if(score >= pass && (C.auto.checked || looping)){ const nb = Math.min(bpm+(SEC?SEC.step():4), ex.maxBpm||Math.round(ex.bpm*1.6)); C.bpm.value = nb; LS.set('tempo.'+ex.key, nb); advice.push(`Авто-темп: наступна спроба на ${nb} bpm.`); }
     LS.set('auto.'+ex.key, C.auto.checked);
+    const paused = hadPause; hadPause = false; if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
     showResult(R, {score, pass, bpm, advice: advice.join(' ') || 'Чисто і рівно в темпі.',
-      stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, ctx);
+      stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, paused ? Object.assign({}, ctx, {done:()=>{}}) : ctx);
   }
-  return ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  const cleanup = ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  cleanup.pause = pause; cleanup.resume = resume; return cleanup;
 }
 
 // ---------- 4. Динаміка ----------
@@ -1225,6 +1361,141 @@ const Side = {
     l.innerHTML = `<div><span>Нота</span><b>${Live.note!=null?esc(pcName(Live.note-Settings.offset)):'—'}</b></div><div><span>Дихання</span><b>${Live.breath}</b></div>`+
       (Live.micOn?`<div><span>Строй</span><b>${Live.cents!=null?(Live.cents>0?'+':'')+Math.round(Live.cents)+' ц':'—'}</b></div><div><span>Гучність</span><b>${Live.db>-90?Math.round(Live.db)+' дБ':'—'}</b></div>`:''); }
 };
+
+// ---------- Акорди з MIDI-доріжок ----------
+QUAL.m7b5 = [0,3,6,10]; QUAL.dim7 = [0,3,6,9]; QUAL['7sus4'] = [0,5,7,10];
+const DETECT_Q = [['maj7',[0,4,7,11]],['7',[0,4,7,10]],['m7',[0,3,7,10]],['m7b5',[0,3,6,10]],['dim7',[0,3,6,9]],['',[0,4,7]],['m',[0,3,7]],['dim',[0,3,6]],['sus4',[0,5,7]],['6',[0,4,7,9]],['m6',[0,3,7,9]]];
+const NAMES_SHARP = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+// Визначає акорд у кожному вікні (півтакту в 4/4, такт у 3/4) за доріжками супроводу
+function detectChords(tracks, total, beats){
+  const harm = (tracks||[]).filter(t=>t.kind !== 'drums' && t.kind !== 'lead');
+  if(!harm.length || !total) return null;
+  const win = beats === 4 ? 2 : beats, out = [];
+  for(let w = 0; w < total - 1e-6; w += win){
+    const we = Math.min(total, w + win), wt = new Array(12).fill(0); let low = null, lowN = 999;
+    harm.forEach(t=>t.notes.forEach(([n, s, d])=>{ const ov = Math.min(s+d, we) - Math.max(s, w); if(ov <= 0) return;
+      const k = t.kind === 'bass' ? 1.6 : 1; wt[pc(n)] += ov * k; if(n < lowN){ lowN = n; low = pc(n); } }));
+    const sum = wt.reduce((a,b)=>a+b, 0);
+    if(sum < 0.2){ out.push(['N', we - w]); continue; }
+    let best = null, bs = -1e9;
+    for(let r = 0; r < 12; r++) for(const [q, iv] of DETECT_Q){
+      const tones = iv.map(x=>(r+x)%12); let s = 0;
+      for(let p = 0; p < 12; p++) s += tones.includes(p) ? wt[p] : -0.6*wt[p];
+      s -= iv.length > 3 ? 0.08*sum : 0;            // простіші акорди мають перевагу при рівності
+      if(low === r) s += 0.25*sum;                   // бас на тоніці
+      if(tones.length > 3 && wt[(r+iv[3])%12] < 0.05*sum) s -= 0.2*sum; // септима мусить реально звучати
+      if(s > bs){ bs = s; best = NAMES_SHARP[r] + q; } }
+    out.push([best, we - w]);
+  }
+  // злити однакові сусідні
+  const merged = []; out.forEach(([nm, d])=>{ const l = merged[merged.length-1]; if(l && l[0] === nm) l[1] += d; else merged.push([nm, d]); });
+  return merged.map(([nm, d])=>nm + ':' + +d.toFixed(3)).join(' ');
+}
+// акорди пісні → формат вправи імпровізації
+const IMPROV_TYPE = { '':'maj', m:'min', '7':'dom7', maj7:'maj7', m7:'m7', m7b5:'m7', dim:'min', dim7:'min', sus4:'maj', '6':'maj', m6:'min', '7sus4':'dom7' };
+function chordsForImprov(str){
+  return parseChords(str).filter(c=>c.root != null).map(c=>{ const m = /^([A-G][#b♯♭]?)(.*)$/.exec(c.name.replace('♯','#').replace('♭','b'));
+    return {name:c.name, root:m[1].replace('♯','#').replace('♭','b') + '3', type: IMPROV_TYPE[m[2]] || 'maj', beats:c.beats}; });
+}
+function scaleFromChords(str){ const w = new Array(12).fill(0);
+  parseChords(str).forEach(c=>c.tones.forEach(t=>w[t] += c.beats));
+  const pcs = w.map((v,i)=>[i,v]).sort((a,b)=>b[1]-a[1]).slice(0,7).map(x=>x[0]).sort((a,b)=>a-b);
+  return pcs.map(p=>NAMES_SHARP[p] + (p < 2 ? '5' : '4')).sort((a,b)=>parseNote(a).midi - parseNote(b).midi).join(' '); }
+
+// ---------- Імпорт MusicXML (.musicxml, .xml, .mxl) ----------
+// Перетворює партитуру на ту саму структуру, що й читач MIDI: {tracks:[{name, program, notes:[{n,s,e,v}]}], div, bpm, tsig, chords}
+async function readScoreFile(file){
+  const name = file.name.toLowerCase();
+  if(/\.(mid|midi)$/.test(name)) return readMidiFile(await file.arrayBuffer());
+  let xml;
+  if(name.endsWith('.mxl')){
+    if(!window.JSZip){ for(const src of (DESKTOP ? ['vendor/jszip.min.js'] : []).concat(['https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'])){ try{ await loadScript(src); if(window.JSZip) break; }catch(e){} } }
+    if(!window.JSZip) throw new Error('не вдалося відкрити .mxl');
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    let path = null; const cont = zip.file('META-INF/container.xml');
+    if(cont){ const m = /full-path="([^"]+)"/.exec(await cont.async('string')); if(m) path = m[1]; }
+    if(!path) path = Object.keys(zip.files).find(f=>/\.(xml|musicxml)$/i.test(f) && !f.startsWith('META-INF'));
+    xml = await zip.file(path).async('string');
+  } else xml = await file.text();
+  return parseMusicXML(xml);
+}
+const STEP_PC = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+const KIND = { major:'', minor:'m', dominant:'7', 'major-seventh':'maj7', 'minor-seventh':'m7', diminished:'dim', 'diminished-seventh':'dim7', 'half-diminished':'m7b5',
+  augmented:'', 'suspended-fourth':'sus4', 'major-sixth':'6', 'minor-sixth':'m6', 'dominant-ninth':'7', 'major-ninth':'maj7', 'minor-ninth':'m7', 'suspended-second':'', power:'' };
+function parseMusicXML(xml){
+  const doc = new DOMParser().parseFromString(xml, 'application/xml'); if(doc.querySelector('parsererror')) throw new Error('файл MusicXML пошкоджений');
+  const DIV = 480, txt = (el, sel) => { const x = el.querySelector(sel); return x ? x.textContent.trim() : null; };
+  const names = {}; doc.querySelectorAll('part-list score-part').forEach(sp=>{ names[sp.getAttribute('id')] = txt(sp, 'part-name') || sp.getAttribute('id'); });
+  let bpm = null, tsig = null, harmPart = null; const tracks = [], harmonies = [];
+  doc.querySelectorAll('part').forEach((part, pi)=>{
+    let div = 1, t = 0, transp = 0, lastStart = 0; const notes = [], open = {};
+    part.querySelectorAll(':scope > measure').forEach(meas=>{
+      for(const el of meas.children){
+        const tag = el.tagName;
+        if(tag === 'attributes'){ const d = txt(el, 'divisions'); if(d) div = +d; const bt = txt(el, 'time beats'); if(bt && !tsig) tsig = +bt;
+          const ch = txt(el, 'transpose chromatic'), oc = txt(el, 'transpose octave-change'); if(ch != null) transp = +ch + 12*(+oc||0); }
+        else if(tag === 'sound' || tag === 'direction'){ const s = tag === 'sound' ? el : el.querySelector('sound'); if(s && s.getAttribute('tempo') && !bpm) bpm = Math.round(+s.getAttribute('tempo')); }
+        else if(tag === 'backup'){ t -= (+txt(el, 'duration')||0) * DIV / div; }
+        else if(tag === 'forward'){ t += (+txt(el, 'duration')||0) * DIV / div; }
+        else if(tag === 'harmony' && (harmPart === null || harmPart === pi)){ const st = txt(el, 'root root-step'); if(st){ harmPart = pi; const alt = +txt(el, 'root root-alter') || 0, kind = el.querySelector('kind');
+            harmonies.push({t, name: NAMES_SHARP[((STEP_PC[st] + alt + transp) % 12 + 12) % 12] + (KIND[kind ? kind.textContent.trim() : 'major'] ?? '')}); } }
+        else if(tag === 'note'){
+          const dur = (+txt(el, 'duration')||0) * DIV / div, isChord = !!el.querySelector('chord'), rest = !!el.querySelector('rest'), grace = !!el.querySelector('grace');
+          if(grace) continue;
+          const start = isChord ? lastStart : t;
+          if(!rest){ const st = txt(el, 'pitch step'), alt = +txt(el, 'pitch alter') || 0, oct = +txt(el, 'pitch octave');
+            const n = (oct+1)*12 + STEP_PC[st] + alt + transp, tieStop = !!el.querySelector('tie[type="stop"]'), tieStart = !!el.querySelector('tie[type="start"]');
+            if(tieStop && open[n]){ open[n].e = start + dur; if(!tieStart) delete open[n]; }
+            else { const nt = {n, s:start, e:start + dur, v:0.8}; notes.push(nt); if(tieStart) open[n] = nt; } }
+          if(!isChord){ lastStart = t; t += dur; }
+        }
+      }
+    });
+    if(notes.length) tracks.push({name: names[part.getAttribute('id')] || 'Партія '+(pi+1), program:null, notes: notes.sort((a,b)=>a.s-b.s || b.n-a.n)});
+  });
+  let chords = null;
+  if(harmonies.length){ harmonies.sort((a,b)=>a.t-b.t); const end = Math.max(...tracks.map(tr=>Math.max(...tr.notes.map(x=>x.e)))), parts = [];
+    if(harmonies[0].t > 0) parts.push('N:' + +(harmonies[0].t/DIV).toFixed(3));
+    harmonies.forEach((h,i)=>{ const e = i+1 < harmonies.length ? harmonies[i+1].t : end; const d = (e - h.t)/DIV; if(d > 0.01) parts.push(h.name + ':' + +d.toFixed(3)); });
+    chords = parts.join(' '); }
+  return { tracks, div:DIV, bpm: bpm || 100, tsig: tsig || 4, chords };
+}
+
+// ---------- Транспонування мінусовки без зміни темпу ----------
+// WSOLA: розтягуємо запис у часі в r разів, потім передискретизуємо назад — темп той самий, висота зсунута на k півтонів.
+async function pitchShiftBuffer(audio, semis, progress){
+  const r = Math.pow(2, semis/12), sr = audio.sampleRate, chs = Math.min(2, audio.numberOfChannels), len = audio.length;
+  const N = 2048, Hs = N/2, Ha = Hs / r, tol = 384, win = new Float32Array(N); for(let i=0;i<N;i++) win[i] = 0.5 - 0.5*Math.cos(2*Math.PI*i/N);
+  const src = [...Array(chs)].map((_,c)=>audio.getChannelData(c)), mono = new Float32Array(len);
+  for(let c=0;c<chs;c++){ const d = src[c]; for(let i=0;i<len;i++) mono[i] += d[i]/chs; }
+  const outLen = Math.ceil(len * r) + N, out = [...Array(chs)].map(()=>new Float32Array(outLen)), norm = new Float32Array(outLen);
+  const frames = Math.floor((len - N - tol) / Ha); let prev = 0;
+  for(let m = 0; m < frames; m++){
+    const nominal = Math.round(m * Ha); let best = nominal;
+    if(m > 0){ const nat = prev + Hs; let bs = -Infinity;
+      for(let d = -tol; d <= tol; d += 8){ const p = nominal + d; if(p < 0 || p + N >= len) continue; let s = 0;
+        for(let i = 0; i < Hs; i += 8) s += mono[p+i] * mono[nat+i]; if(s > bs){ bs = s; best = p; } } }
+    const o = m * Hs;
+    for(let c=0;c<chs;c++){ const d = src[c], od = out[c]; for(let i=0;i<N;i++) od[o+i] += d[best+i]*win[i]; }
+    for(let i=0;i<N;i++) norm[o+i] += win[i];
+    prev = best;
+    if(m % 400 === 0){ progress && progress(m/frames*0.9); await new Promise(res=>setTimeout(res, 0)); }
+  }
+  for(let c=0;c<chs;c++){ const od = out[c]; for(let i=0;i<outLen;i++) if(norm[i] > 1e-3) od[i] /= norm[i]; }
+  // передискретизація: прискорюємо в r разів (лінійна інтерполяція)
+  const res = new AudioBuffer({length: len, numberOfChannels: chs, sampleRate: sr});
+  for(let c=0;c<chs;c++){ const od = out[c], rd = res.getChannelData(c); for(let i=0;i<len;i++){ const x = i*r, k = Math.floor(x), f = x-k; rd[i] = (od[k]||0)*(1-f) + (od[k+1]||0)*f; } }
+  progress && progress(1); return res;
+}
+function bufferToWav(buf){
+  const chs = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate, data = new DataView(new ArrayBuffer(44 + len*chs*2));
+  const w = (o, s) => { for(let i=0;i<s.length;i++) data.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); data.setUint32(4, 36 + len*chs*2, true); w(8,'WAVE'); w(12,'fmt '); data.setUint32(16,16,true); data.setUint16(20,1,true); data.setUint16(22,chs,true);
+  data.setUint32(24,sr,true); data.setUint32(28,sr*chs*2,true); data.setUint16(32,chs*2,true); data.setUint16(34,16,true); w(36,'data'); data.setUint32(40,len*chs*2,true);
+  const ch = [...Array(chs)].map((_,c)=>buf.getChannelData(c)); let o = 44;
+  for(let i=0;i<len;i++) for(let c=0;c<chs;c++){ const s = Math.max(-1, Math.min(1, ch[c][i])); data.setInt16(o, s<0 ? s*0x8000 : s*0x7fff, true); o += 2; }
+  return new Blob([data], {type:'audio/wav'});
+}
 
 // Програма навчання. Ноти в тексті пишуться як {G4} і автоматично показуються з клавішами.
 const ODE = 'B4:1 B4:1 C5:1 D5:1 D5:1 C5:1 B4:1 A4:1 G4:1 G4:1 A4:1 B4:1 B4:1.5 A4:0.5 A4:2 B4:1 B4:1 C5:1 D5:1 D5:1 C5:1 B4:1 A4:1 G4:1 G4:1 A4:1 B4:1 A4:1.5 G4:0.5 G4:2';
@@ -2138,7 +2409,7 @@ function songUnlocked(s){ if(!s.unlock || Settings.unlockAll) return true; const
 const unlockLesson = s => LESSONS.find(x=>x.id===s.unlock);
 
 // ---------- Каркас ----------
-const VIEWS = [['program','Програма'],['daily','Заняття дня'],['songs','Популярні мелодії'],['reading','Тренажер нот'],['teacher','Вчитель'],['analyzer','Аналізатор звуку'],['metro','Метроном'],['rep','Мій репертуар'],['takes','Записи'],['stats','Прогрес'],['settings','Налаштування']];
+const VIEWS = [['program','Програма'],['daily','Заняття дня'],['songs','Популярні мелодії'],['reading','Тренажер нот'],['rhythm','Тренажер ритму'],['trans','Переходи'],['teacher','Вчитель'],['analyzer','Аналізатор звуку'],['metro','Метроном'],['rep','Мій репертуар'],['takes','Записи'],['stats','Прогрес'],['settings','Налаштування']];
 const UI = { view:'program', lesson:null, step:0, cleanup:null };
 const DEF_PASS = {notes:80, long:70, rhythm:75, dyn:65, vibrato:70, echo:70, improv:70};
 const passOf = ex => ex.pass || DEF_PASS[ex.type];
@@ -2175,7 +2446,7 @@ function go(view, arg){
   UI.view = view;
   document.querySelectorAll('#nav button').forEach(b=>b.setAttribute('aria-current', b.dataset.v===(view==='lesson'?'program':view)));
   const v = $('view'); v.innerHTML = ''; scrollTo(0,0);
-  ({program:viewProgram, daily:viewDaily, reading:viewReading, teacher:viewTeacher, perform:viewPerform, songs:viewSongs, lesson:(v,a)=>a && a.lesson ? viewLesson(v, a.lesson, a.step) : viewLesson(v, a), analyzer:viewAnalyzer, metro:viewMetro, rep:viewRep, takes:viewTakes, stats:viewStats, settings:viewSettings})[view](v, arg);
+  ({program:viewProgram, daily:viewDaily, reading:viewReading, rhythm:viewRhythmTrainer, trans:viewTrans, teacher:viewTeacher, perform:viewPerform, songs:viewSongs, lesson:(v,a)=>a && a.lesson ? viewLesson(v, a.lesson, a.step) : viewLesson(v, a), analyzer:viewAnalyzer, metro:viewMetro, rep:viewRep, takes:viewTakes, stats:viewStats, settings:viewSettings})[view](v, arg);
 }
 
 // ---------- Прогрес уроків ----------
@@ -2197,10 +2468,12 @@ function viewProgram(v){
     <p class="sub">${done} з ${LESSONS.length} уроків пройдено. ${next?`Наступний: <a href="#" id="goNext">${esc(next.id+' '+next.title)}</a>.`:'Програму завершено.'}</p>
     <div class="progressbar"><i style="width:${done/LESSONS.length*100}%"></i></div>
     ${resume?`<div class="callout here-call row" style="justify-content:space-between"><span>${last?`Ти зупинився на уроці <b>${esc(last.id+' '+last.title)}</b>${lessonDone(last)?', його пройдено':`, ${last.ex.filter((e,i)=>(lp(last.id).best[i]||0)>=passOf(e)).length} з ${last.ex.length} вправ`}.`:'Почни з першого уроку.'}${resume.lesson!==last?` Далі: ${esc(resume.lesson.id+' '+resume.lesson.title)}.`:''}</span><button class="primary" id="goResume">Продовжити</button></div>`:''}
+    ${(()=>{ const last = TeacherLog.get().find(x=>x.q==='Розбір прогресу'); const stale = !last || Date.now() - last.at > 7*864e5; return stale && totalMin() >= 60 ? `<div class="callout row" style="justify-content:space-between"><span>${last?'Минуло понад тиждень від останнього розбору з вчителем.':'Ти вже маєш понад годину практики: час для першого розбору з вчителем.'}</span><button id="goTeach">Розбір з вчителем</button></div>` : ''; })()}
     <div class="callout row" style="justify-content:space-between"><span>${(Progress.daily||{})[today()] ? 'Заняття дня вже пройдено. Можна продовжити урок або пограти мелодії.' : 'Не знаєш, з чого почати? Заняття дня на 20 хвилин зібране з твого прогресу.'}</span><button class="primary" id="goDaily">Заняття дня</button></div>
     ${!Live.midiNames.length && !Live.micOn ? '<div class="callout">Підключи EWI кабелем USB-C або увімкни мікрофон угорі. Без інструмента можна перевірити все з клавіатури: A S D F грають D E F F♯, 1–8 грають G4…G5, [ і ] змінюють силу «дихання».</div>':''}
     <div id="levels"></div>`;
   $('goDaily').onclick = ()=>go('daily');
+  if($('goTeach')) $('goTeach').onclick = ()=>go('teacher');
   if(resume) $('goResume').onclick = ()=>go('lesson', resume);
   if(next) $('goNext').onclick = e=>{ e.preventDefault(); go('lesson', next); };
   LEVELS.forEach(L=>{
@@ -2288,8 +2561,9 @@ function viewAnalyzer(v){
       <div class="stats" id="aStats"></div>
       <div class="cv"><div class="lbl"><span>Висота відносно найближчої ноти, 8 секунд</span><span>±50 центів</span></div><canvas id="pTrace" class="tall"></canvas></div>
       <div class="cv"><div class="lbl"><span>Спектр</span><span>50 Гц – 8 кГц</span></div><canvas id="spec"></canvas></div>
+      <div id="ccHost"></div>
     </div><aside id="side"></aside></div>`;
-  Side.mount($('side'));
+  Side.mount($('side')); ccPanel($('ccHost'));
   (async()=>{ try{ const ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
     ds.forEach(d=>{ const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || 'Вхід '+d.deviceId.slice(0,6); $('micSel').appendChild(o); }); $('micSel').value = Settings.micId||''; }catch(e){} })();
   $('micGo').onclick = async()=>{ Settings.micId = $('micSel').value; saveSettings(); try{ await micStart(Settings.micId); $('micGo').textContent='Перезапустити мікрофон'; }catch(e){ alert('Мікрофон недоступний: '+e.message); } };
@@ -2394,8 +2668,8 @@ function viewRep(v, open){
   if(open){ const s = songs.find(x=>x.id===open); if(s){ return repPlay(v, s); } }
   v.innerHTML = `<h2 class="title">Мій репертуар</h2>
     <p class="sub">Додай мелодії, які хочеш вивчити: MIDI-файл або ручний запис нот. Кожна мелодія стає вправою з метрономом, авто-темпом і аналізом.</p>
-    <div class="panel"><h3 style="margin-top:0">Імпорт MIDI</h3>
-      <div class="row"><input type="file" id="mf" accept=".mid,.midi"><label class="muted">Квантування <select id="mq"><option value="0.5">восьмі</option><option value="0.25" selected>шістнадцяті</option></select></label></div>
+    <div class="panel"><h3 style="margin-top:0">Імпорт MIDI або MusicXML</h3>
+      <div class="row"><input type="file" id="mf" accept=".mid,.midi,.musicxml,.xml,.mxl"><label class="muted">Квантування <select id="mq"><option value="0.5">восьмі</option><option value="0.25" selected>шістнадцяті</option></select></label></div>
       <div id="mfOut"></div><p class="hint" id="mfInfo"></p>
       <h3>Ручний запис</h3>
       <p class="muted">Формат: нота:тривалість у долях. Наприклад <code>G4:1 A4:0.5 B4:0.5 r:1 C5:2</code>, де r означає паузу, # дієз, b бемоль.</p>
@@ -2416,7 +2690,7 @@ function viewRep(v, open){
       $('sList').appendChild(r); }); };
   list();
   $('mf').onchange = async e => { const f = e.target.files[0]; if(!f) return;
-    try{ const m = readMidiFile(await f.arrayBuffer()); if(!m.tracks.length) throw new Error('У файлі немає нот');
+    try{ const m = await readScoreFile(f); if(!m.tracks.length) throw new Error('У файлі немає нот');
       const cand = m.tracks.map((t,i)=>i).filter(i=>!m.tracks[i].drums);
       let lead = cand.find(i=>LEAD_RX.test(m.tracks[i].name)); if(lead==null) lead = cand.reduce((bi,i)=>m.tracks[i].notes.length>m.tracks[bi].notes.length?i:bi, cand[0]);
       $('mfOut').innerHTML = `<table class="fing" style="margin-top:10px"><tr><th>Моя партія</th><th>Супровід</th><th>Доріжка</th><th>Нот</th></tr>
@@ -2427,9 +2701,12 @@ function viewRep(v, open){
       $('mUse').onclick = ()=>{ const li = +$('mfOut').querySelector('[name=mlead]:checked').value;
         const acc = [...$('mfOut').querySelectorAll('[data-acc]:checked')].map(c=>+c.dataset.acc).filter(i=>i!==li);
         PendingTracks = acc.map(i=>midiTrackToBeats(m.tracks[i], m.div));
-        $('sSeq').value = midiToSeq(m.tracks[li], m.div, +$('mq').value, PendingTracks.length>0); $('sBpm').value = m.bpm; $('sTitle').value = f.name.replace(/\.midi?$/i,'');
+        $('sSeq').value = midiToSeq(m.tracks[li], m.div, +$('mq').value, PendingTracks.length>0); $('sBpm').value = m.bpm; $('sTitle').value = f.name.replace(/\.(midi?|musicxml|xml|mxl)$/i,'');
         if([2,3,4,6].includes(m.tsig)) $('sBeats').value = String(m.tsig);
-        $('mfInfo').textContent = PendingTracks.length ? `Разом з мелодією збережеться супровід: ${PendingTracks.map(t=>t.name).join(', ')}.` : ''; };
+        const seqTotal = parseSeq($('sSeq').value).reduce((x,y)=>x+y.d,0);
+        const ch = m.chords || (PendingTracks.length ? detectChords(PendingTracks, seqTotal, m.tsig||4) : null);
+        if(ch && !$('sCh').value.trim()){ $('sCh').value = ch; }
+        $('mfInfo').textContent = (PendingTracks.length ? `Разом з мелодією збережеться супровід: ${PendingTracks.map(t=>t.name).join(', ')}. ` : '') + ($('sCh').value.trim() ? (m.chords ? 'Акорди взято з партитури.' : 'Акорди визначено автоматично з доріжок, їх можна поправити.') : ''); };
     }catch(err){ $('mfOut').innerHTML = `<p class="hint bad">${esc(err.message)}</p>`; } };
   $('sSave').onclick = () => { const seq = $('sSeq').value.trim(), items = parseSeq(seq);
     if(!items.length || items.some(i=>i.s!=='r' && i.n==null) || items.some(i=>!(i.d>0))){ $('sErr').textContent = 'Перевір запис: кожна нота має бути у форматі G4:1.'; return; }
@@ -2476,10 +2753,13 @@ function viewStats(v){
     <h3>Останні 7 днів</h3><div class="row" style="align-items:flex-end;height:120px;gap:14px">${days.map(d=>`<div style="text-align:center;flex:1;max-width:60px"><div style="background:var(--brass);height:${Math.max(2,d[1]/maxM*90)}px;border-radius:4px 4px 0 0"></div><div class="muted">${esc(d[0])}</div><div class="muted">${Math.round(d[1])}</div></div>`).join('')}</div>
     <h3>Рівні</h3>${LEVELS.map(L=>{ const ls = LESSONS.filter(l=>l.lvl===L.n), d = ls.filter(lessonDone).length; return `<div>${L.n}. ${esc(L.title)} <span class="muted">${d}/${ls.length}</span><div class="progressbar"><i style="width:${d/ls.length*100}%"></i></div></div>`; }).join('')}
     <h3>Ноти, на яких найчастіше помилки</h3>${weak.length?`<table><tr><th>Нота з клавішами</th><th>Помилок</th></tr>${weak.map(([k,c])=>`<tr><td>${esc(withKeys(parseNote(k.replace('♯','#').replace('♭','b')).midi))} <span class="muted">${esc(k)}</span></td><td>${c}</td></tr>`).join('')}</table>`:'<p class="muted">Поки немає даних.</p>'}
+    <h3>Журнал занять</h3><div class="row"><textarea class="report" id="jT" style="min-height:56px;flex:1" placeholder="Що сьогодні вийшло, що заважало, що помітив у звуці…"></textarea><button id="jS">Зберегти</button></div>
+    <div id="jL">${(Progress.journal||[]).slice(0,10).map(j=>`<p class="muted" style="margin:6px 0"><b>${new Date(j.at).toLocaleDateString('uk-UA')}</b> ${esc(j.text)}</p>`).join('') || '<p class="muted">Записів поки немає. Нотатки бачить вчитель у звіті.</p>'}</div>
     <h3>Досягнення</h3>${badgesHTML()}
     <h3>Звіт для розбору</h3><p class="muted">Цей звіт бачить вчитель. Його можна й скопіювати в будь-який чат.</p>
     <textarea class="report" id="rep" readonly></textarea><div class="row" style="margin-top:8px"><button id="cp">Скопіювати звіт</button></div>`;
   $('rep').value = buildReport();
+  $('jS').onclick = () => { const tx = $('jT').value.trim(); if(!tx) return; journalAdd(tx); go('stats'); };
   $('cp').onclick = async()=>{ try{ await navigator.clipboard.writeText($('rep').value); }catch(e){ $('rep').select(); document.execCommand('copy'); } $('cp').textContent = 'Скопійовано'; setTimeout(()=>$('cp').textContent='Скопіювати звіт',1500); };
 }
 
@@ -2499,6 +2779,8 @@ function viewSettings(v){
     <div class="row" style="margin-top:10px"><button id="sCal">Калібрувати октаву</button><span class="muted" id="sCalT">Зсув: ${Settings.offset} півтонів</span></div>
     <h3>Затримка</h3><p class="muted">Компенсує час між звуком і реакцією застосунку. «Виміряти» дає 8 клацань: грай коротку ноту точно на кожне.</p>
     <div class="row"><label>MIDI, мс <input type="number" id="sLm" value="${Settings.latMidi}"></label><label>Мікрофон, мс <input type="number" id="sLa" value="${Settings.latAudio}"></label><button id="sLat">Виміряти</button><span class="muted" id="sLatT"></span></div>
+    <h3>Дихання</h3><div class="row"><button id="sBC">Калібрувати дихання</button><span class="muted" id="sBCT">${Settings.breathCal ? `Тихо ${Settings.breathCal.soft}, звичайно ${Settings.breathCal.mid}, гучно ${Settings.breathCal.loud}.` : 'Не калібровано: використовуються типові значення.'}</span></div><div id="sBCbox"></div>
+    <h3>Вигляд нот</h3><div class="row"><label class="muted">За замовчуванням <select id="sView">${Object.entries(VIEW_NAMES).map(([k,t])=>`<option value="${k}" ${k===(Settings.view||'staff')?'selected':''}>${t}</option>`).join('')}</select></label><span class="muted">Перемикається й прямо над нотами у вправах.</span></div>
     <h3>Відлік перед грою</h3><div class="row"><label class="muted">Рахунок метронома перед вступом, щонайменше <input type="number" id="sCnt" min="0" max="20" value="${Settings.countInSec ?? 5}" style="width:60px"> с</label><span class="muted">0 означає один такт.</span></div>
     <h3>Вивід звуку</h3><div class="row"><label class="muted">Пристрій <select id="sOut"><option value="">Типовий пристрій Windows</option></select></label><button id="sTest">Перевірити звук</button><span class="muted" id="sTestT"></span></div>
     <h3>Звук і аналіз</h3>
@@ -2539,6 +2821,8 @@ function viewSettings(v){
   $('sOut').onchange = async e=>{ const ok = await setOutput(e.target.value); $('sTestT').textContent = ok ? 'Пристрій змінено. Натисни «Перевірити звук».' : 'Не вдалося перемкнути пристрій.'; };
   $('sTest').onclick = async ()=>{ $('sTestT').textContent = 'Граю три ноти…'; const r = await soundTest();
     $('sTestT').textContent = r.peak > 0.01 ? `Застосунок відтворює звук (рівень ${r.peak}, ${r.rate} Гц, затримка ${r.latency} мс, вивід: ${r.sink}). Якщо не чути, вибери інший пристрій вище або перевір мікшер гучності Windows.` : `Звуку немає всередині застосунку: стан аудіо «${r.state}». Перезапусти застосунок і повідом про це.`; };
+  $('sBC').onclick = () => breathCalibration($('sBCbox'), c=>{ $('sBCT').textContent = `Тихо ${c.soft}, звичайно ${c.mid}, гучно ${c.loud}.`; });
+  $('sView').onchange = e=>{ Settings.view = e.target.value; saveSettings(); };
   $('sCnt').onchange = e=>{ Settings.countInSec = clamp(+e.target.value||0, 0, 20); saveSettings(); };
   $('sUnl').onchange = e=>{ Settings.unlockAll = e.target.checked; saveSettings(); };
   $('sReset').onclick = ()=>{ if(confirm('Скинути весь прогрес уроків і статистику?')){ Progress.lessons = {}; Progress.days = {}; Progress.wrong = {}; Progress.log = []; saveProgress(); go('settings'); } };
@@ -2569,6 +2853,8 @@ if(DESKTOP){
 if(DESKTOP && window.ewiStore.reportPractice){ const rp = () => window.ewiStore.reportPractice(Math.round(Progress.days[today()]||0)); rp(); setInterval(rp, 60000); }
 setTimeout(()=>{ try{ checkBadges(); }catch(e){} }, 2000);
 
+function journalAdd(text){ Progress.journal = Progress.journal || []; Progress.journal.unshift({at:Date.now(), text:text.slice(0,500)}); Progress.journal = Progress.journal.slice(0,200); saveProgress(); }
+
 // ---------- Популярні мелодії ----------
 function songBest(id){ return (Progress.songs||{})[id] || {}; }
 function saveSongBest(id, mode, score, bpm){ Progress.songs = Progress.songs || {}; const s = Progress.songs[id] = Progress.songs[id] || {};
@@ -2592,11 +2878,11 @@ function songPlay(v, s){
   const items = parseSeq(s.seq), total = items.reduce((a,b)=>a+b.d,0), uniq = [...new Set(items.filter(i=>i.n!=null).map(i=>i.n))].sort((a,b)=>a-b);
   v.innerHTML = `<a href="#" id="back">← Популярні мелодії</a>
     <h2 class="title">${esc(s.title)}</h2><p class="sub">${esc(s.origin)}. ${noteText(esc(s.about))}</p>
-    <div class="steps"><button id="t0" aria-current="true">Про мелодію</button><button id="t1">Ноти у своєму темпі</button><button id="t2">З фонограмою</button><button id="t3">Режим виступу</button></div>
+    <div class="steps"><button id="t0" aria-current="true">Про мелодію</button><button id="t1">Ноти у своєму темпі</button><button id="t4">Очікування</button><button id="t2">З фонограмою</button><button id="t3">Режим виступу</button></div>
     <div class="grid2"><div id="box"></div><aside id="side"></aside></div>`;
   Side.mount($('side')); $('back').onclick = e=>{ e.preventDefault(); go('songs'); };
   let stop = null;
-  const tabs = k => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); const box = $('box');
+  const tabs = k => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); $('t4').setAttribute('aria-current', false); const box = $('box');
     if(k===0){
       box.innerHTML = `<div class="theory">
         <div class="row" style="margin:6px 0 14px"><button class="primary" id="pl">▶ Послухати з фонограмою</button>
@@ -2622,6 +2908,8 @@ function songPlay(v, s){
         bpm:Math.round(s.bpm*0.8), maxBpm:s.maxBpm, tol:85, chords:s.chords, style:s.style, key:'songs.'+s.id, pass:75, allowLoop:true},
         {done:res=>saveSongBest(s.id, 'play', res.score, res.bpm), again:()=>tabs(2), next:()=>tabs(2)});
     } };
+  $('t4').onclick = () => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', false)); $('t4').setAttribute('aria-current', true);
+    stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Фонограма грає далі лише тоді, коли ти береш правильну ноту.', seq:s.seq, beats:s.beats, den:s.den, bpm:s.bpm, chords:s.chords, style:s.style, key:'wait.songs.'+s.id, pass:80}, {done(){}, again:()=>$('t4').click(), next:()=>tabs(2)}); };
   [0,1,2].forEach(i=>$('t'+i).onclick = ()=>tabs(i)); $('t3').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, den:s.den, chords:s.chords, style:s.style, back:['songs', s.id]}); tabs(0);
   UI.cleanup = ()=>{ if(stop) stop(); };
 }
@@ -2630,19 +2918,23 @@ function songPlay(v, s){
 function saveRepItem(s){ const ss = LS.get('songs',[]); const i = ss.findIndex(y=>y.id===s.id); if(i>=0){ const { _file, ...clean } = s; ss[i] = {...ss[i], ...clean}; LS.set('songs', ss); } }
 async function repPlay(v, s){
   v.innerHTML = `<a href="#" id="back">← Мій репертуар</a><h2 class="title">${esc(s.title)}</h2>
-    <div class="steps"><button id="m1" aria-current="true">У своєму темпі</button><button id="m2">З метрономом</button><button id="m3">Мінусовка${s.audio?' ✓':''}</button><button id="m4">Режим виступу</button></div>
+    <div class="steps"><button id="m1" aria-current="true">У своєму темпі</button><button id="m5">Очікування</button><button id="m2">З метрономом</button><button id="m6">Імпровізація</button><button id="m3">Мінусовка${s.audio?' ✓':''}</button><button id="m4">Режим виступу</button></div>
     <div class="grid2"><div id="box"></div><aside id="side"></aside></div>`;
   Side.mount($('side')); $('back').onclick = e=>{ e.preventDefault(); go('rep'); };
-  const audio = s.audio ? {...s.audio, url: await MediaStore.url(s.audio.file)} : null;
+  if(s.tracks && s.tracks.length && !s.chords){ const tot = parseSeq(s.seq).reduce((a,b)=>a+b.d,0), ch = detectChords(s.tracks, tot, s.beats||4); if(ch){ s.chords = ch; s.chordsAuto = true; saveRepItem({id:s.id, chords:ch, chordsAuto:true}); } }
+  const audio = s.audio ? {...s.audio, url: await MediaStore.url(await MediaStore.pick(s.audio))} : null;
   let stop = null;
   const onMute = arr => { s.muted = arr; saveRepItem({id:s.id, muted:arr}); };
-  const mode = k => { if(stop) stop(); stop = null; [1,2,3].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
+  const mode = k => { if(stop) stop(); stop = null; [1,2,3,5,6].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
+    if(k===5){ stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Супровід чекає на кожну правильну ноту. Так п\'єсу вчать без поспіху, але разом з гуртом.', seq:s.seq, bpm:s.bpm, beats:s.beats, key:'wait.'+s.id, chords:s.chords||null, style:s.style||'pop', tracks:s.tracks, muted:s.muted, onMute, pass:80}, {done(){}, again:()=>mode(5), next:()=>mode(2)}); return; }
+    if(k===6){ if(!s.chords){ $('box').innerHTML = '<div class="theory"><p>Для імпровізації потрібні акорди. Імпортуй мелодію з доріжками супроводу або впиши акорди вручну.</p></div>'; return; }
+      stop = RUNNERS.improv($('box'), {type:'improv', title:'Імпровізація на гармонію пісні', how:`Акорди пісні${s.chordsAuto?' визначено автоматично з доріжок':''}. Над станом видно поточний акорд, звуки акорду на сильних долях дають найкращий результат.`, bpm:s.bpm, loops:1, beats:s.beats||4, scaleSeq:scaleFromChords(s.chords), chords:chordsForImprov(s.chords), pass:65}, {done(){}, again:()=>mode(6), next:()=>mode(6)}); return; }
     if(k===3){ stop = minusTab($('box'), s, audio, ()=>repPlay(v, s)); return; }
     const ex = k===1 ? {type:'notes', title:'Ноти', how:'Натисни «Програти», щоб почути мелодію, потім вивчи послідовність без метронома.', seq:s.seq.replace(/r:\S+/g,'').replace(/:\S+/g,''), playSeq:s.seq, playBpm:s.bpm, beats:s.beats, playChords:s.chords||null, playStyle:s.style||'pop', tracks:s.tracks, muted:s.muted, onMute}
                      : {type:'rhythm', title:'З метрономом', how:'Вибери фрагмент і увімкни петлю, щоб відпрацювати складні такти. Після кожного чистого проходу темп підніметься.', seq:s.seq, bpm:s.bpm, beats:s.beats, maxBpm:Math.round(s.bpm*1.5), key:'song.'+s.id, tol:80, artic:null, chords:s.chords||null, style:s.style||'pop', tracks:s.tracks, muted:s.muted, onMute, audio, allowLoop:true};
     stop = RUNNERS[ex.type]($('box'), ex, { done:res=>{ if(k===2){ const ss = LS.get('songs',[]); const x = ss.find(y=>y.id===s.id); if(x){ x.best = Math.max(x.best||0, Math.round(res.score)); LS.set('songs', ss); } Progress.log.unshift({at:Date.now(), lesson:'реп.', ex:s.title, score:Math.round(res.score), bpm:res.bpm}); saveProgress(); } },
       again:()=>mode(k), next:()=>mode(2) }); };
-  $('m1').onclick = ()=>mode(1); $('m2').onclick = ()=>mode(2); $('m3').onclick = ()=>mode(3);
+  $('m1').onclick = ()=>mode(1); $('m2').onclick = ()=>mode(2); $('m3').onclick = ()=>mode(3); $('m5').onclick = ()=>mode(5); $('m6').onclick = ()=>mode(6);
   $('m4').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, chords:s.chords, style:s.style, tracks:s.tracks, muted:s.muted, audio, back:['rep', s.id]});
   mode(1);
   UI.cleanup = ()=>{ if(stop) stop(); MinusAudio.stop(); };
@@ -2667,9 +2959,11 @@ function minusTab(box, s, audio, reload){
       <button class="small" id="mxM">−20 мс</button><button class="small" id="mxP">+20 мс</button>
       <label class="muted">Темп запису, bpm <input type="number" step="0.1" id="mxBpm" value="${(+audio.bpm).toFixed(1)}" style="width:80px"></label>
       <button id="mxSave">Зберегти</button><button id="mxCheck">Перевірити з метрономом</button></div>
+    <h3>Транспонування</h3><div class="row"><label class="muted">Тональність <select id="mxSemi">${[-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6].map(k=>`<option value="${k}" ${k===(s.audio.semis||0)?'selected':''}>${k>0?'+'+k:k} півтон.</option>`).join('')}</select></label><button id="mxTr">Застосувати</button><span class="muted" id="mxTrT">${s.audio.semis?`Зараз грає версія ${s.audio.semis>0?'+':''}${s.audio.semis}.`:''}</span></div>
+    <p class="muted">Обробка займає кілька секунд на хвилину запису; результат зберігається окремим файлом поруч з оригіналом.</p>
     <div class="row" style="margin-top:10px"><label class="muted">Гучність мінусовки <input type="range" id="mxVol" min="0" max="1" step="0.05" value="${Settings.minusVol ?? 0.9}"></label>
       <button class="small" id="mxDel">Прибрати мінусовку</button></div>
-    <p class="muted">Темп у вправах можна знижувати: мінусовка сповільнюється без зміни висоти. Транспонування мінусовки поки не підтримується.</p></div>`;
+    <p class="muted">Темп у вправах можна знижувати: мінусовка сповільнюється без зміни висоти.</p></div>`;
   const A = $('mxA'); let taps = [], tapping = false, check = null;
   const tap = () => { if(!tapping) return; taps.push(A.currentTime); $('mxInfo').textContent = `Тапів: ${taps.length}`; if(taps.length >= 8) $('mxDone').disabled = false; };
   const key = e => { if(e.code==='Space' && tapping){ e.preventDefault(); tap(); } }; addEventListener('keydown', key);
@@ -2687,6 +2981,13 @@ function minusTab(box, s, audio, reload){
     const au = {url:audio.url, offset:+$('mxOff').value, bpm:+$('mxBpm').value};
     check = schedule({bpm:au.bpm, beats:s.beats||4, countIn:1, totalBeats:(s.beats||4)*8, clickOn:true}); MinusAudio.startAt(au, check.t0Perf, 0, au.bpm);
     $('mxCheck').textContent = '■ Стоп'; setTimeout(()=>{ if(check){ check = null; MinusAudio.stop(); $('mxCheck').textContent = 'Перевірити з метрономом'; } }, check.endPerf - now() + 200); };
+  $('mxTr').onclick = async () => { const k = +$('mxSemi').value; $('mxTr').disabled = true;
+    try{ if(!k){ s.audio = {...s.audio, semis:0}; saveRepItem({id:s.id, audio:s.audio}); toast('Мінусовка в оригінальній тональності.'); reload(); return; }
+      const orig = await MediaStore.url(s.audio.file), buf = await ac().decodeAudioData(await (await fetch(orig)).arrayBuffer());
+      const out = await pitchShiftBuffer(buf, k, p=>{ $('mxTrT').textContent = `Обробка: ${Math.round(p*100)}%`; });
+      const name = s.audio.file.replace(/\.[a-z0-9]+$/i, '') + ` (${k>0?'+':''}${k}).wav`, saved = await MediaStore.put(name, bufferToWav(out));
+      s.audio = {...s.audio, semis:k, tfile:saved||name}; saveRepItem({id:s.id, audio:s.audio}); toast(`Мінусовку транспоновано на ${k>0?'+':''}${k} півтон.`); reload(); }
+    catch(err){ $('mxTrT').textContent = 'Не вдалося обробити: ' + err.message; } finally { const b = $('mxTr'); if(b) b.disabled = false; } };
   $('mxVol').oninput = e => { Settings.minusVol = +e.target.value; saveSettings(); if(MinusAudio.gain) MinusAudio.gain.gain.value = Settings.minusVol; };
   $('mxDel').onclick = () => { if(!confirm('Прибрати мінусовку з цієї мелодії? Сам файл лишиться в папці.')) return; delete s.audio; const ss = LS.get('songs',[]); const x = ss.find(y=>y.id===s.id); if(x){ delete x.audio; LS.set('songs', ss); } reload(); };
   return () => { removeEventListener('keydown', key); A.pause(); if(check) check.stop(); MinusAudio.stop(); };
@@ -2713,15 +3014,18 @@ function viewPerform(v, p){
     <div id="pfChips"></div><div id="pfRows"></div></div>`;
   const draw = nolabels => { const W = []; $('pfRows').innerHTML = rows.map((r,i)=>{ const st = staffSVG(r.items, {rhythmic:true, beats, den:p.den, pickup:r.first?PICK0:0, nolabels}); r.lay = st; W.push(+st.svg.match(/width="(\d+(\.\d+)?)"/)[1]); return `<div class="pf-row" id="pfr${i}"><span class="pf-num">${i*PER+1}</span>${st.svg.replace('id="cursor"', `id="pfc${i}"`)}</div>`; }).join('');
     const maxW = Math.max(...W); rows.forEach((r,i)=>{ const svg = $('pfr'+i).querySelector('svg'); svg.setAttribute('width', (W[i]/maxW*100)+'%'); svg.removeAttribute('height'); }); curRow = -1; };
-  let curRow = -1; draw(!!LS.get('pf.nolabels', false));
+  let curRow = -1, roll = null;
+  const drawAll = () => { if(isRoll()){ roll = mountRoll($('pfRows'), FULL, {rhythmic:true, beats, pickup:PICK0, height: Math.max(360, innerHeight - 220), chordLabels: chordLabelsOf(p.chords)}); }
+    else { roll = null; $('pfRows').classList.remove('as-roll'); draw(!!LS.get('pf.nolabels', false)); } };
+  drawAll(); viewToggle($('pfRows'), drawAll);
   trackChips($('pfChips'), ex, ()=> run ? run.mix : null); $('pfChips').remove();
   prepareSound({seq:FULL, chords:p.chords, tracks:p.tracks});
   let run = null;
   $('pfBack').onclick = e => { e.preventDefault(); if(document.fullscreenElement) document.exitFullscreen(); go(...(p.back||['program'])); };
   $('pfFull').onclick = () => { const el = $('pf'); if(document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen && el.requestFullscreen(); };
-  $('pfLab').onchange = () => { LS.set('pf.nolabels', !$('pfLab').checked); draw(!$('pfLab').checked); };
+  $('pfLab').onchange = () => { LS.set('pf.nolabels', !$('pfLab').checked); if(!roll) draw(!$('pfLab').checked); };
   $('pfGuide').onchange = () => { if(run) setGuide($('pfGuide').checked); };
-  const stopRun = () => { if(!run) return; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); $('pfGo').textContent = '▶ Грати'; document.querySelectorAll('.pf-row.on').forEach(x=>x.classList.remove('on')); curRow = -1; };
+  const stopRun = () => { if(!run) return; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); $('pfGo').textContent = '▶ Грати'; document.querySelectorAll('.pf-row.on').forEach(x=>x.classList.remove('on')); curRow = -1; if(roll) roll.update(0); };
   $('pfGo').onclick = () => { if(run){ stopRun(); return; }
     const bpm = clamp(+$('pfBpm').value || p.bpm || 80, 30, 260);
     run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:FULL, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup:PICK0,
@@ -2730,7 +3034,8 @@ function viewPerform(v, p){
     if($('pfRec').checked && !recStart(p.title+' · виступ · '+bpm+' bpm')) toast('Для запису увімкни мікрофон угорі.');
     $('pfGo').textContent = '■ Стоп'; };
   const stopLoop = loopFrames(t=>{ if(!run) return; const beat = (t - run.t0Perf)/run.spbMs;
-    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil(-beat*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
+    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0 && roll) roll.update(beat); if(beat < 0){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil(-beat*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
+    if(roll){ roll.update(beat); return; }
     let r = rows.findIndex(x=>beat >= x.sB && beat < x.eB); if(r < 0) return;
     if(r !== curRow){ if(curRow>=0) $('pfr'+curRow).classList.remove('on'); $('pfr'+r).classList.add('on'); curRow = r;
       const el = $('pfr'+r), box = document.fullscreenElement ? $('pf') : null, top = el.getBoundingClientRect().top;
@@ -2790,6 +3095,8 @@ function dailyPlan(){
     steps.push({title:'Повторення проблемних нот', min:3, why:'Ноти, на яких ти найчастіше помиляєшся: '+weak.map(w=>withKeys(parseNote(w).midi)).join(', ')+'.',
       ex:{type:'notes', title:'Проблемні ноти', how:'Кожну проблемну ноту чергуєш з опорною.', seq:seq.join(' '), pass:85}}); }
   else steps.push({title:'Хроматика', min:3, why:'Помилок поки мало, тож тренуємо всі півтони.', ex:{type:'notes', title:'Хроматична гама', how:'Вгору і вниз.', seq:'D4 Eb4 E4 F4 F#4 G4 G#4 A4 Bb4 B4 C5 C#5 D5 C#5 C5 B4 Bb4 A4 G#4 G4 F#4 F4 E4 Eb4 D4', pass:80}});
+  const tw = transStats(5).filter(r=>r.rate > 0.1)[0];
+  if(tw) steps.push({title:`Перехід ${pcName(tw.a)} → ${pcName(tw.b)}`, min:2, why:`На цьому переході ${Math.round(tw.rate*100)}% разів проскакує проміжна нота: ${transTip(tw.a, tw.b)}.`, ex:transDrill(tw.a, tw.b)});
   const done = LESSONS.filter(lessonDone).length;
   steps.push({title:'Читання нот', min:3, why:'Швидкість реакції: бачиш ноту — граєш.', reading:{range: done < 8 ? 'base' : done < 20 ? 'two' : 'wide', acc: done >= 10, count:12, hint:true}});
   const l = nextLesson();
@@ -2827,8 +3134,10 @@ function viewDaily(v){
   function finish(){ const min = Math.round((now()-t0)/60000); Progress.daily = Progress.daily || {}; Progress.daily[today()] = {min, steps:steps.length, done:results.filter(x=>x!=null).length}; saveProgress(); checkBadges();
     $('dWhy').textContent = ''; $('dBox').innerHTML = `<div class="result pass"><div><span class="score">Готово</span><span class="muted"> · ${min} хв</span></div>
       <table class="fing">${steps.map((s,i)=>`<tr><td>${esc(s.title)}</td><td>${results[i]!=null?results[i]:'пропущено'}</td></tr>`).join('')}</table>
+      <textarea class="report" id="dJ" style="min-height:60px;margin-top:10px" placeholder="Нотатка до заняття: що вийшло, що заважало…"></textarea>
       <div class="row" style="margin-top:8px"><button class="primary" id="dT">Розбір з вчителем</button><button id="dP">До програми</button></div></div>`;
-    $('dT').onclick = ()=>go('teacher'); $('dP').onclick = ()=>go('program'); }
+    const saveJ = () => { const tx = $('dJ') && $('dJ').value.trim(); if(tx){ journalAdd(tx); $('dJ').value = ''; } };
+    $('dT').onclick = ()=>{ saveJ(); go('teacher'); }; $('dP').onclick = ()=>{ saveJ(); go('program'); }; }
   $('dSkip').onclick = () => step(k+1);
   step(0);
   UI.cleanup = () => { if(stop) stop(); clearInterval(clock); };
@@ -2852,8 +3161,8 @@ const BADGES = [
   ['read2', 'Читання з листа', 'Тренажер нот: менше 0,8 с на ноту при точності від 90%', () => (Progress.reading||[]).some(r=>r.avg < 0.8 && r.acc >= 90)],
   ['daily5', 'П\'ять занять дня', 'Завершити 5 занять дня', () => Object.keys(Progress.daily||{}).length >= 5],
 ];
-const totalMin = () => Object.values(Progress.days||{}).reduce((a,b)=>a+b,0);
-const songsPassed = () => Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length;
+
+
 function checkBadges(){
   Progress.badges = Progress.badges || {}; const fresh = [];
   for(const [id, title, , test] of BADGES){ if(Progress.badges[id]) continue; let ok = false; try{ ok = test(); }catch(e){} if(ok){ Progress.badges[id] = Date.now(); fresh.push(title); } }
@@ -2875,6 +3184,8 @@ function buildReport(){
     weak.length ? 'Найчастіші помилки: '+weak.map(([k,c])=>`${withKeys(parseNote(k.replace('♯','#').replace('♭','b')).midi)} ×${c}`).join('; ')+'.' : '',
     rd ? `Читання нот: ${rd.avg} с на ноту, точність ${rd.acc}%.` : '',
     heat.length ? 'Карта тактів: '+heat.join('; ')+'.' : '',
+    (Progress.journal||[]).length ? 'Нотатки учня: '+(Progress.journal||[]).slice(0,5).map(j=>`${new Date(j.at).toLocaleDateString('uk-UA')}: ${j.text}`).join(' | ') : '',
+    (()=>{ const tr = typeof transStats==='function' ? transStats(5).filter(r=>r.rate>0.1).slice(0,5) : []; return tr.length ? 'Переходи з проміжними нотами: '+tr.map(r=>`${pcName(r.a)}→${pcName(r.b)} ${Math.round(r.rate*100)}%`).join(', ')+'.' : ''; })(),
     'Останні спроби:', ...(Progress.log||[]).slice(0,25).map(r=>`  ${new Date(r.at).toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${r.lesson} ${r.ex}: ${r.score}${r.bpm?' на '+r.bpm+' bpm':''}`)].filter(Boolean).join('\n');
 }
 function teacherContext(){ const L = Settings.labels;
@@ -2883,8 +3194,8 @@ function teacherContext(){ const L = Settings.labels;
 Коли згадуєш ноту, завжди пиши її разом з клавішами у форматі «G (${L.L1} ${L.L2} ${L.L3})».
 Запис нот у застосунку: нота:тривалість у долях, наприклад G4:1 A4:0.5 B4:0.5 r:1 C5:2 (r — пауза, # — дієз, b — бемоль). Акорди: G:4 Am:2 D7:2.
 
-${buildReport()}`; }
-const TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
+${buildReport()}${(()=>{ const prev = TeacherLog.get().slice(0,3); return prev.length ? '\n\nТвої попередні поради цьому учневі (від нових до старих). Звір зі звітом, що з них виконано, і скажи про це одним-двома реченнями:\n' + prev.map(x=>`— ${new Date(x.at).toLocaleDateString('uk-UA')}, «${x.q.slice(0,60)}»: ${x.a.replace(/\s+/g,' ').slice(0,500)}`).join('\n') : ''; })()}`; }
+
 async function askClaude(prompt){
   if(DESKTOP && window.ewiStore.claudeAsk) return window.ewiStore.claudeAsk(prompt);
   try{ await navigator.clipboard.writeText(prompt); }catch(e){}
@@ -2912,7 +3223,8 @@ function viewTeacher(v){
       if(!r.ok){ $('tOut').innerHTML = `<div class="panel"><b>Не вдалося отримати відповідь.</b><p class="muted">${esc(r.error||'')}</p></div>`; return; }
       const text = after ? after(r.text) : r.text; TeacherLog.add(label, text); $('tOut').innerHTML = `<div class="panel theory">${mdLite(text)}</div>`; hist(); }
     finally{ $('tBusy').textContent = ''; ['tRev','tEt','tAsk'].forEach(i=>$(i).disabled = false); } };
-  $('tRev').onclick = () => run('Розбір прогресу', teacherContext() + `\n\nЗроби розбір мого прогресу: що виходить добре, що гальмує, і дай конкретний план на наступні 7 днів по 20–30 хвилин на день із прив'язкою до уроків і вправ застосунку. Без загальних порад.`);
+  $('tRev').onclick = () => { Progress.lastReview = Date.now(); saveProgress(); run('Розбір прогресу', teacherContext() + `\n\nЗроби розбір мого прогресу: що виходить добре, що гальмує, і дай конкретний план на наступні 7 днів по 20–30 хвилин на день із прив'язкою до уроків і вправ застосунку. Без загальних порад.`); };
+  if(UI.autoReview){ UI.autoReview = false; setTimeout(()=>$('tRev').click(), 300); }
   $('tAsk').onclick = () => { const q = $('tQ').value.trim(); if(!q) return; run(q, teacherContext() + `\n\nПитання учня: ${q}`); };
   $('tEt').onclick = () => run('Етюд під слабкі місця', teacherContext() + `\n\nСклади ОРИГІНАЛЬНИЙ короткий етюд (8 тактів, розмір 4/4), який тренує мої слабкі ноти й переходи зі звіту. Не використовуй і не імітуй відомі мелодії. Діапазон D4–D5, темп 60–90.
 Відповідай ЛИШЕ JSON без пояснень і без markdown: {"title":"…","bpm":72,"beats":4,"seq":"G4:1 …","chords":"G:4 …","style":"pop","tips":["…","…"]}.
@@ -2925,6 +3237,247 @@ function viewTeacher(v){
       return `**Етюд «${j.title}» додано в «Мій репертуар».**\n\n${(j.tips||[]).map(t=>'- '+t).join('\n')}`;
     }catch(e){ return 'Вчитель відповів, але етюд не вдалося розібрати. Спробуй ще раз.\n\n' + text; } });
 }
+
+// раз на тиждень пропонуємо розбір, якщо була практика
+setTimeout(()=>{ try{
+  const last = Progress.lastReview || 0, week = Object.entries(Progress.days||{}).filter(([d])=>Date.now() - new Date(d).getTime() < 7*864e5).reduce((a,[,m])=>a+m,0);
+  if(Date.now() - last > 7*864e5 && week >= 30) toast(`За тиждень ${Math.round(week)} хв практики. Вчитель може зробити розбір і план на наступний тиждень.`, [['Отримати розбір', ()=>{ UI.autoReview = true; go('teacher'); }]]);
+}catch(e){} }, 6000);
+
+// ---------- Режим очікування ----------
+// Супровід грає відрізками від ноти до ноти: застосунок чекає правильну ноту і лише тоді грає далі.
+function runWait(box, ex, ctx){
+  const items = parseSeq(ex.seq), beats = ex.beats||4, total = items.reduce((a,b)=>a+b.d,0), pickup = ex.pickup ?? pickupOf(ex.chords, beats);
+  const R = exShell(box, ex, `<label class="muted">Темп <input type="number" data-c="bpm" min="30" max="260" value="${LS.get('tempo.'+ex.key, null) || ex.bpm}"></label>
+    ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.tracks&&ex.tracks.length?'':'checked'}> фонограма</label>`:''}
+    <button class="primary" data-c="go">Почати</button>`);
+  const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
+  const starts = []; { let c = 0; items.forEach(it=>{ starts.push(c); c += it.d; }); }
+  const idx = items.map((it,i)=>i).filter(i=>items[i].n!=null);
+  const marks = items.map(()=>({}));
+  const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, marks, chordLabels: chordLabelsOf(ex.chords)});
+  let layout = scoreView(R.staff, items, vopts()); viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); layout.update(cur>=0 ? starts[idx[cur]] : 0); });
+  trackChips(box.querySelector('.focus'), ex, ()=> seg ? seg.mix : null);
+  prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
+  let cur = -1, seg = null, segTimer = 0, active = false, misses = 0, firstTry = 0, waitFrom = 0; const waits = [];
+  const bpm = () => clamp(+C.bpm.value || ex.bpm, 30, 260);
+  const segEnd = k => k+1 < idx.length ? starts[idx[k+1]] : total;
+  const show = () => { layout.setMarks && layout.setMarks(marks); if(cur >= 0 && cur < idx.length){ const i = idx[cur]; marks.forEach((m,j)=>{ if(m.cls==='cur') delete m.cls; }); if(!marks[i].cls) marks[i].cls = 'cur';
+      layout = scoreView(R.staff, items, vopts()); layout.update(starts[i]); setFocus(R, items[i].n); } };
+  // зіграти відрізок супроводу [a, b) у долях
+  function playSeg(a, b, onEnd){ if(seg){ seg.stop(); clearTimeout(segTimer); }
+    if(b - a < 0.01){ seg = null; onEnd && onEnd(); return; }
+    const r = sliceSection(items, ex, a, b);
+    seg = schedule({bpm:bpm(), beats, countIn:0, totalBeats:r.total, clickOn:!ex.chords && !(ex.tracks && ex.tracks.length),
+      backing: C.back && C.back.checked && r.chords ? {chords:r.chords, style:ex.style} : null, tracks: r.tracks && r.tracks.length ? {list:r.tracks, muted:ex.muted||r.tracks.map(()=>false)} : null});
+    segTimer = setTimeout(()=>{ onEnd && onEnd(); }, seg.endPerf - now()); }
+  function waitNote(k){ cur = k; if(k >= idx.length){ finish(); return; } waitFrom = now(); misses = 0; show();
+    setHint(R, `Чекаю ${withKeys(items[idx[k]].n)}.`); }
+  C.go.onclick = () => { if(active){ stop(); return; } active = true; C.go.textContent = '■ Стоп'; Object.keys(marks).forEach(k=>marks[k] = {}); firstTry = 0; waits.length = 0; R.result.innerHTML = '';
+    const intro = idx.length ? starts[idx[0]] : 0;
+    if(intro > 0){ setHint(R, 'Вступ…'); playSeg(0, intro, ()=>waitNote(0)); } else waitNote(0); };
+  function stop(){ active = false; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); C.go.textContent = 'Почати'; cur = -1; }
+  let pending = -1; // наступна нота, поки ще грає відрізок попередньої
+  const off = listen((type, d)=>{ if(!active || type!=='on') return;
+    // гра випереджає супровід: правильну наступну ноту приймаємо одразу, відрізок обриваємо
+    if(cur === -2 && pending >= 0 && pending < idx.length && matchNote(d.n, items[idx[pending]].n).ok){ if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); cur = pending; waitFrom = now(); misses = 0; }
+    if(cur < 0 || cur >= idx.length) return;
+    const i = idx[cur], m = matchNote(d.n, items[i].n);
+    if(!m.ok){ misses++; noteWrong(items[i].n); setHint(R, missTip(d.n, items[i].n), 'bad'); return; }
+    waits.push(now() - waitFrom); marks[i] = {cls: misses ? 'warn' : 'ok'}; if(!misses) firstTry++;
+    const k = cur; cur = -2; pending = k + 1; // поки грає відрізок, наступну ноту можна взяти й раніше
+    setHint(R, 'Добре, далі…', 'ok'); show();
+    playSeg(starts[i], segEnd(k), ()=>{ if(active) waitNote(k+1); }); });
+  function finish(){ active = false; seg = null; C.go.textContent = 'Почати'; layout = scoreView(R.staff, items, vopts()); layout.update(total);
+    const n = idx.length, score = n ? firstTry/n*100 : 0, avgWait = mean(waits)/1000;
+    if(score >= 90){ const nb = bpm() + 4; LS.set('tempo.'+ex.key, nb); C.bpm.value = nb; }
+    showResult(R, {score, pass: ex.pass||80, bpm: bpm(), advice: score >= 90 ? 'Майже без зупинок. Можна переходити до гри з метрономом.' : 'Повтори кілька разів, поки ноти не підуть з першої спроби, потім перейди до режиму з метрономом.',
+      stats:[['з першої спроби', firstTry+'/'+n], ['середнє очікування', avgWait.toFixed(1)+' с'], ['темп', bpm()+' bpm']]}, ctx); }
+  setFocus(R, items[idx[0]] ? items[idx[0]].n : null); setHint(R, 'Натисни «Почати». Супровід гратиме, щойно ти візьмеш правильну ноту, і чекатиме, поки не знайдеш наступну.');
+  let paused = false;
+  const cleanup = () => { off(); stop(); };
+  cleanup.pause = () => { if(!active) return false; paused = true; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); setHint(R, 'Пауза.'); return true; };
+  cleanup.resume = () => { if(!paused) return false; paused = false; if(cur === -2 && pending >= 0) waitNote(pending); else if(cur >= 0) waitNote(cur); return true; };
+  return cleanup;
+}
+RUNNERS.wait = runWait;
+
+// ---------- Аналіз переходів між нотами ----------
+// Проміжна («зайва») нота: коротший за GHOST_MS звук між двома нотами, коли пальці ставляться неодночасно.
+const GHOST_MS = 45;
+const TR = { prev:null, cur:null, ghost:false, offAt:0, dirty:false };
+Hub.on((type, d)=>{
+  if(d && d.src && d.src !== 'midi') return;
+  if(type === 'off'){ if(TR.cur && d.n === TR.cur.n) TR.offAt = d.t; return; }
+  if(type !== 'on') return;
+  const n = d.n - Settings.offset, t = d.t;
+  if(TR.cur){
+    const dur = t - TR.cur.t;
+    if(dur < GHOST_MS){ TR.ghost = true; TR.cur = {n, t}; return; }
+    // попередня нота справжня: фіксуємо перехід prev → cur, якщо гра була зв'язною
+    if(TR.prev && TR.cur.t - TR.prev.t < 2500 && TR.prev.n !== TR.cur.n){ const k = TR.prev.n + '>' + TR.cur.n; Progress.trans = Progress.trans || {};
+      const r = Progress.trans[k] = Progress.trans[k] || [0, 0]; r[0]++; if(TR.prevGhost) r[1]++; TR.dirty = true; }
+    TR.prev = TR.cur; TR.prevGhost = TR.ghost; TR.ghost = false;
+  }
+  TR.cur = {n, t};
+});
+setInterval(()=>{ if(TR.dirty){ TR.dirty = false; LS.set('progress', Progress); } }, 5000);
+function transStats(min=4){
+  return Object.entries(Progress.trans||{}).filter(([,r])=>r[0] >= min).map(([k,r])=>{ const [a,b] = k.split('>').map(Number); return {a, b, n:r[0], g:r[1], rate:r[1]/r[0]}; })
+    .sort((x,y)=>y.rate - x.rate || y.g - x.g);
+}
+function transTip(a, b){
+  const ka = keysOf(a), kb = keysOf(b), up = kb.filter(x=>!ka.includes(x)), down = ka.filter(x=>!kb.includes(x)), roll = rollerOf(a) !== rollerOf(b);
+  const L = Settings.labels, nm = xs => xs.map(x=>L[x]||x).join(' ');
+  const parts = [];
+  if(up.length && down.length) parts.push(`одночасно знімаєш ${nm(down)} і ставиш ${nm(up)}: думай про це як про один рух`);
+  else if(down.length) parts.push(`знімаєш ${nm(down)} разом, однією дією`);
+  else if(up.length) parts.push(`ставиш ${nm(up)} разом, однією дією`);
+  if(roll) parts.push('ролик переходить точно разом із пальцями');
+  return parts.join('; ');
+}
+function transDrill(a, b){ const A = SHARPS[pc(a)] + (Math.floor(a/12)-1), B = SHARPS[pc(b)] + (Math.floor(b/12)-1);
+  return {type:'notes', title:`Перехід ${pcName(a)} → ${pcName(b)}`, how:`Чергуй ${withKeys(a)} і ${withKeys(b)} legato, повільно. Мета — жодної проміжної ноти.`, seq:Array.from({length:8}).flatMap(()=>[A,B]).join(' '), pass:90, key:'trans.'+a+'.'+b}; }
+function viewTrans(v){
+  const list = transStats();
+  v.innerHTML = `<h2 class="title">Переходи між нотами</h2>
+    <p class="sub">Застосунок стежить за кожним переходом, який ти граєш з EWI через MIDI. Якщо між двома нотами проскакує коротка проміжна нота (до ${GHOST_MS} мс), пальці або ролик ставляться неодночасно. Нижче переходи з найбільшою часткою таких помилок; на кожному можна потренуватися.</p>
+    <div class="grid2"><div id="trBox">${list.length ? `<table class="fing"><tr><th>Перехід</th><th>Зіграно</th><th>З проміжною нотою</th><th></th></tr>${list.slice(0,20).map((r,i)=>`<tr><td><b>${esc(withKeys(r.a))} → ${esc(withKeys(r.b))}</b><div class="muted" style="font-size:12px">${esc(transTip(r.a, r.b))}</div></td><td>${r.n}</td><td style="color:${r.rate>0.2?'var(--bad)':r.rate>0.05?'var(--brass)':'var(--ok)'}">${Math.round(r.rate*100)}%</td><td><button class="small" data-tr="${i}">Тренувати</button></td></tr>`).join('')}</table>`
+      : '<p class="muted">Даних поки немає. Пограй уроки чи мелодії з EWI, підключеним через USB-C, і тут з\'являться твої переходи.</p>'}</div><aside id="side"></aside></div>`;
+  Side.mount($('side')); let stop = null;
+  v.querySelectorAll('[data-tr]').forEach(b=>b.onclick = () => { const r = list[+b.dataset.tr]; if(stop) stop();
+    stop = RUNNERS.notes($('trBox'), transDrill(r.a, r.b), { done:()=>{}, again:()=>b.click(), next:()=>go('trans') }); });
+  UI.cleanup = () => { if(stop) stop(); };
+}
+
+// ---------- Калібрування дихання і контролери EWI ----------
+// Типові опорні значення датчика дихання, під які складено вправи
+const BREATH_REF = { soft:25, mid:65, loud:100 };
+function calMap(v){ const c = Settings.breathCal; if(!c) return v;
+  const R = BREATH_REF, seg = (x, a0, a1, b0, b1) => b0 + (x - a0) * (b1 - b0) / (a1 - a0);
+  const r = v <= R.soft ? seg(v, 0, R.soft, 0, c.soft) : v <= R.mid ? seg(v, R.soft, R.mid, c.soft, c.mid) : v <= R.loud ? seg(v, R.mid, R.loud, c.mid, c.loud) : seg(v, R.loud, 127, c.loud, 127);
+  return Math.round(clamp(r, 0, 127)); }
+const calBand = b => b ? [calMap(b[0]), calMap(b[1])] : b;
+function breathCalibration(host, done){
+  const steps = [['soft','Зіграй будь-яку ноту якомога тихіше, але щоб звук не зникав, 4 секунди.'], ['mid','Тепер звичайною, комфортною гучністю, 4 секунди.'], ['loud','І найгучніше, що можеш без напруги, 4 секунди.']];
+  const res = {}; let k = 0, samples = [], t0 = 0, off = null;
+  host.innerHTML = `<div class="panel"><b id="bcT"></b><div class="hint" id="bcH">Почни грати, запис іде, поки звучить нота.</div><div class="progressbar"><i id="bcP" style="width:0"></i></div>
+    <div class="row" style="margin-top:8px"><button id="bcX" class="small">Скасувати</button></div></div>`;
+  const next = () => { if(k >= steps.length){ finish(); return; } $('bcT').textContent = `${k+1}/3. ${steps[k][1]}`; samples = []; t0 = 0; $('bcP').style.width = '0'; };
+  let release = false;
+  off = Hub.on((type, d)=>{ if(type !== 'breath' || k >= steps.length) return;
+    // між кроками чекаємо паузу в диханні, щоб значення попереднього кроку не потрапили в наступний
+    if(release){ if(d.v <= 6){ release = false; $('bcH').textContent = 'Почни грати, запис іде, поки звучить нота.'; } return; }
+    if(d.v > 6){ if(!t0) t0 = d.t; samples.push(d.v); const p = Math.min(1, (d.t - t0)/4000); $('bcP').style.width = p*100+'%';
+      if(p >= 1){ samples.sort((a,b)=>a-b); res[steps[k][0]] = samples[Math.floor(samples.length*0.5)]; k++; release = true; next(); if(k < steps.length) $('bcH').textContent = 'Зупинись і вдихни, потім грай наступний рівень.'; } }
+    else if(t0 && samples.length){ t0 = 0; samples = []; $('bcP').style.width = '0'; $('bcH').textContent = 'Звук обірвався, почни цей рівень ще раз: 4 секунди без перерви.'; } });
+  function finish(){ off(); const c = {soft:Math.max(5, res.soft), mid:Math.max(res.soft+5, res.mid), loud:Math.max(res.mid+5, res.loud)}; Settings.breathCal = c; saveSettings();
+    const tips = []; if(c.loud < 85) tips.push('Найгучніший звук нижчий за типовий: у меню EWI Solo можна збільшити чутливість дихання.');
+    if(c.soft > 40) tips.push('Найтихіший звук досить гучний: можливо, варто зменшити чутливість дихання або попрацювати над тихою подачею.');
+    if(c.loud - c.soft < 45) tips.push('Динамічний діапазон вузький. Вправи на динаміку (урок 3.3) допоможуть його розширити.');
+    host.innerHTML = `<div class="panel"><b>Готово.</b> Тихо ${c.soft}, звичайно ${c.mid}, гучно ${c.loud}. Смуги у вправах на довгі ноти тепер підлаштовані під твоє дихання.<p class="muted">${tips.join(' ') || 'Діапазон у нормі.'}</p></div>`; done && done(c); }
+  $('bcX').onclick = () => { off(); host.innerHTML = ''; };
+  next();
+}
+// Монітор контролерів: які CC надсилає EWI (дихання, прикус, інше)
+const CCMON = {};
+Hub.on((type, d)=>{ if(type !== 'cc') return; const r = CCMON[d.num] = CCMON[d.num] || {min:127, max:0, v:0, hist:[]}; r.v = d.v; r.min = Math.min(r.min, d.v); r.max = Math.max(r.max, d.v); r.hist.push([d.t, d.v]); if(r.hist.length > 600) r.hist.splice(0, 200); });
+const CC_NAMES = {1:'модуляція', 2:'дихання (breath)', 7:'гучність', 11:'експресія', 74:'яскравість'};
+function ccPanel(host){
+  host.innerHTML = `<div class="cv"><div class="lbl"><span>Контролери EWI (CC)</span><span class="muted">прикус: <select id="ccBite"><option value="">не вибрано</option></select></span></div><div id="ccList" class="muted">Подми й покусай мундштук: тут з'являться всі контролери, які надсилає EWI.</div><canvas id="ccTrace" style="height:90px"></canvas></div>`;
+  const sel = $('ccBite'); let known = '';
+  const tick = () => { if(!document.body.contains(host)) return; const ks = Object.keys(CCMON).map(Number).sort((a,b)=>a-b);
+    if(ks.join() !== known){ known = ks.join(); sel.innerHTML = '<option value="">не вибрано</option>' + ks.map(k=>`<option value="${k}" ${+Settings.biteCC===k?'selected':''}>CC${k}</option>`).join(''); }
+    if(ks.length) $('ccList').innerHTML = ks.map(k=>{ const r = CCMON[k]; return `<div class="row" style="gap:8px"><span style="width:150px">CC${k}${CC_NAMES[k]?' · '+CC_NAMES[k]:''}${+Settings.biteCC===k?' · прикус':''}</span><span class="meter"><i style="width:${r.v/127*100}%"></i></span><span>${r.v}</span><span class="muted">діапазон ${r.min}–${r.max}</span></div>`; }).join('');
+    const cv = $('ccTrace'), b = CCMON[Settings.biteCC]; if(cv && b){ const dpr = devicePixelRatio||1, W = cv.clientWidth, H = cv.clientHeight; cv.width = W*dpr; cv.height = H*dpr; const g = cv.getContext('2d'); g.scale(dpr,dpr);
+      const t1 = now(), t0 = t1 - 8000; g.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--brass'); g.lineWidth = 2; g.beginPath();
+      b.hist.filter(h=>h[0] >= t0).forEach((h,i)=>{ const x = (h[0]-t0)/8000*W, y = H - h[1]/127*(H-6) - 3; i ? g.lineTo(x,y) : g.moveTo(x,y); }); g.stroke(); }
+    requestAnimationFrame(tick); };
+  sel.onchange = () => { Settings.biteCC = sel.value ? +sel.value : null; saveSettings(); };
+  tick();
+}
+
+// ---------- Тренажер ритму ----------
+// Ритмічна фігура на одній ноті: грай будь-яку ноту на EWI або стукай пробілом.
+const RT_CELLS = {
+  1: [['q'],['q'],['h'],['r:q']],
+  2: [['q'],['e','e'],['e','e'],['r:e','e'],['h'],['r:q']],
+  3: [['q.','e'],['e','q','e'],['e','e'],['q'],['r:e','e'],['e','r:e']],
+  4: [['t','t','t'],['s','s','s','s'],['e','s','s'],['s','s','e'],['q.','e'],['e','q','e'],['q']]
+};
+const RT_DUR = {w:4, h:2, 'q.':1.5, q:1, e:0.5, s:0.25, t:1/3};
+function rtPattern(level, bars=2, beats=4){
+  const cells = RT_CELLS[level] || RT_CELLS[1], out = []; let tot = 0, guard = 0;
+  while(tot < bars*beats - 1e-6 && guard++ < 200){ const c = cells[Math.floor(Math.random()*cells.length)], len = c.reduce((a,x)=>a + RT_DUR[x.replace('r:','')], 0);
+    const barLeft = beats - (tot % beats); if(len > barLeft + 1e-6) continue; c.forEach(x=>{ const rest = x.startsWith('r:'), d = RT_DUR[x.replace('r:','')]; out.push((rest ? 'r' : 'B4') + ':' + (x==='t' || x==='r:t' ? '1/3' : d)); }); tot += len; }
+  if(!out.some(x=>x.startsWith('B4'))) out[0] = 'B4:1';
+  return out.join(' ');
+}
+function viewRhythmTrainer(v){
+  const st = Object.assign({level:1, bpm:80}, LS.get('rtrainer', {}));
+  v.innerHTML = `<h2 class="title">Тренажер ритму</h2><p class="sub">Читання ритму окремо від нот. Фігура записана на одній ноті: грай будь-яку ноту на EWI або натискай пробіл точно в ритм. Після відліку метроном веде, застосунок міряє відхилення кожної ноти.</p>
+    <div class="panel"><div class="row"><label class="muted">Рівень <select id="rtL">${[[1,'Четвертні, половинні, паузи'],[2,'+ восьмі'],[3,'+ крапки й синкопи'],[4,'+ тріолі й шістнадцяті']].map(([k,t])=>`<option value="${k}" ${k==st.level?'selected':''}>${k}. ${t}</option>`).join('')}</select></label>
+      <label class="muted">Темп <input type="number" id="rtB" min="40" max="200" value="${st.bpm}" style="width:64px"></label><button class="primary" id="rtNew">Новий ритм</button></div></div>
+    <div class="grid2" style="margin-top:14px"><div id="rtBox"></div><aside id="side"></aside></div>`;
+  Side.mount($('side')); let stop = null, down = false;
+  const key = e => { if(e.code !== 'Space' || e.repeat || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return; e.preventDefault(); if(!down){ down = true; emitNoteOn(71 + Settings.offset, now(), 'key'); } };
+  const keyUp = e => { if(e.code !== 'Space') return; down = false; emitNoteOff(71 + Settings.offset, now(), 'key'); };
+  addEventListener('keydown', key); addEventListener('keyup', keyUp);
+  const make = () => { const level = +$('rtL').value, bpm = clamp(+$('rtB').value||80, 40, 200); LS.set('rtrainer', {level, bpm}); if(stop) stop();
+    stop = RUNNERS.rhythm($('rtBox'), {type:'rhythm', title:`Ритм, рівень ${level}`, how:'Будь-яка нота або пробіл. Важливий лише момент початку кожної ноти.', seq:rtPattern(level), bpm, beats:4, tol: level >= 4 ? 60 : 80, key:'rtrainer.'+level, anyPitch:true, pass:80},
+      { done:res=>{ Progress.rhythmTr = Progress.rhythmTr || []; Progress.rhythmTr.unshift({at:Date.now(), level, score:Math.round(res.score)}); Progress.rhythmTr = Progress.rhythmTr.slice(0,50); saveProgress(); }, again:()=>{}, next:make }); };
+  $('rtNew').onclick = make; make();
+  UI.cleanup = () => { if(stop) stop(); removeEventListener('keydown', key); removeEventListener('keyup', keyUp); };
+}
+
+// ---------- Керування вправою: зупинити, почати заново, вчити без поспіху ----------
+// Обгортає кожен тип вправи: над нею з'являється панель із кнопками «Зупинити» і «Почати заново»,
+// а у вправах з метрономом ще й вибір «У темпі» або «Без поспіху» (режим очікування).
+(function(){
+  const base = Object.assign({}, RUNNERS);
+  const wrap = type => function(box, ex, ctx){
+    let stop = null, inner = null, bar = null;
+    const canWait = type === 'rhythm' && !ex.anyPitch && parseSeq(ex.seq).some(i=>i.n!=null);
+    const modeKey = 'mode.' + (ex.key || ex.title || type);
+    let mode = canWait ? LS.get(modeKey, 'tempo') : 'tempo';
+    const setMode = m => { mode = m; LS.set(modeKey, m); mount(); };
+    let paused = false, how = null;
+    // вправи, що чекають на ноту, просто ігнорують гру під час паузи; ті, що йдуть за часом, вміють зупинитись на такті;
+    // короткі вправи за часом (динаміка, вібрато, імпровізація, луна) після паузи починаються спочатку
+    const SELF = ['notes','long','wait'];
+    function doPause(){ if(paused || !stop) return; MinusAudio.stop();
+      if(stop.pause && stop.pause()) how = 'runner'; else if(SELF.includes(type) || type === 'rhythm') how = 'hub';
+      else { stop(); stop = null; how = 'restart'; }
+      Hub.paused = true; paused = true; setUI(); }
+    function doResume(){ if(!paused) return; Hub.paused = false; paused = false; setUI();
+      if(how === 'runner' && stop && stop.resume) stop.resume(); else if(how === 'restart') mount(); }
+    function setUI(){ const pb = box.querySelector('[data-a=pause]'), s = box.querySelector('.pb-state'); if(!pb) return;
+      pb.textContent = paused ? '▶ Продовжити' : '⏸ Пауза'; pb.classList.toggle('primary', paused);
+      s.textContent = paused ? (how === 'restart' ? 'Пауза. Ця вправа коротка, тож продовжиться спочатку.' : 'Пауза. Гра на інструменті зараз не зараховується.') : ''; }
+    const hot = e => { if(e.code !== 'KeyP' || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || !document.body.contains(box)) return; e.preventDefault(); paused ? doResume() : doPause(); };
+    addEventListener('keydown', hot);
+    function mount(){
+      if(stop){ stop(); stop = null; } Hub.paused = false; paused = false;
+      box.innerHTML = `<div class="practice-bar">
+        ${canWait ? `<span class="muted">Як вчити:</span><button data-m="tempo" aria-current="${mode==='tempo'}">У темпі</button><button data-m="wait" aria-current="${mode==='wait'}">Без поспіху: чекає на ноту</button>` : ''}
+        <span class="pb-state muted"></span><span class="sp"></span><button data-a="pause">⏸ Пауза</button><button data-a="restart">↺ Почати заново</button></div>
+        ${canWait && mode==='wait' ? '<p class="muted pb-note">Тут немає темпу: застосунок чекає, поки ти знайдеш потрібну ноту, і лише тоді грає далі. Оцінка в цьому режимі не зараховується, для заліку перемкнись на «У темпі».</p>' : ''}
+        <div class="pb-inner"></div>`;
+      bar = box.querySelector('.practice-bar'); inner = box.querySelector('.pb-inner');
+      bar.querySelectorAll('[data-m]').forEach(b=>b.onclick = () => setMode(b.dataset.m));
+      bar.querySelector('[data-a=restart]').onclick = () => mount();
+      const pb = bar.querySelector('[data-a=pause]'), stateEl = bar.querySelector('.pb-state');
+      pb.onclick = () => paused ? doResume() : doPause();
+      if(canWait && mode === 'wait'){
+        const exW = {...ex, type:'wait', key:(ex.key||'x') + '.wait', how:'Грай по одній ноті: супровід і метроном чекають на тебе.'};
+        stop = base.wait(inner, exW, { done:()=>{ toast('Ноти вивчено. Тепер спробуй у темпі, можна з нижчим темпом.', [['Грати в темпі', ()=>setMode('tempo')]]); }, again:mount, next:()=>setMode('tempo') });
+      } else stop = base[type](inner, ex, Object.assign({}, ctx, { again:mount }));
+    }
+    mount();
+    return () => { removeEventListener('keydown', hot); Hub.paused = false; if(stop){ stop(); stop = null; } };
+  };
+  Object.keys(base).forEach(k => { RUNNERS[k] = wrap(k); });
+})();
 
 </script>
 </body>

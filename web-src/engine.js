@@ -137,14 +137,15 @@ function runNotes(box, ex, ctx){
   const pItems = ex.playSeq ? parseSeq(ex.playSeq) : items.map(i=>({...i, d:1}));
   const R = exShell(box, ex, `<button class="primary" data-p="play">▶ Програти</button>
     <label class="muted">Темп <input type="number" data-p="bpm" min="30" max="240" value="${ex.playBpm||80}" style="width:64px"></label>
-    ${ex.playChords?'<label class="muted"><input type="checkbox" data-p="back" checked> фонограма</label>':''}`);
+    ${ex.playChords?`<label class="muted"><input type="checkbox" data-p="back" ${ex.tracks&&ex.tracks.length?'':'checked'}> фонограма</label>`:''}`);
   const P = {}; box.querySelectorAll('[data-p]').forEach(x=>P[x.dataset.p]=x);
   trackChips(box.querySelector('.focus'), ex, ()=> playing ? playing.h.mix : null);
+  setTimeout(()=>viewToggle(R.staff, ()=>render()), 0);
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
-    const r = mountStaff(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); scrollStaff(R.staff, r.xs[at]);
+    const r = scoreView(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
     setFocus(R, playing ? (playIdx>=0 ? items[playIdx].n : null) : (pos<items.length?items[pos].n:null)); };
   const stopPlay = () => { if(!playing) return; playing.h.stop(); playing.timers.forEach(clearTimeout); playing = null; playIdx = -1; P.play.textContent = '▶ Програти'; render(); };
   P.play.onclick = () => { if(playing){ stopPlay(); return; }
@@ -174,15 +175,16 @@ function runNotes(box, ex, ctx){
     showResult(R, {score, pass:ex.pass||80, advice: weak.length ? 'Повтори окремо: '+[...new Set(weak)].join(', ')+'.' : 'Усі ноти з першої спроби.',
       stats:[['з першої спроби', firstTry+'/'+items.length], ['помилок', misses], ['середня зміна ноти', avg?avg.toFixed(2)+' с':'—']]}, ctx);
   }
-  return ()=>{ stopPlay(); off(); br.off(); stopLoop(); };
+  const cleanup = ()=>{ stopPlay(); off(); br.off(); stopLoop(); }; cleanup.pause = () => { stopPlay(); return false; }; return cleanup;
 }
 
 // ---------- 2. Довгі ноти ----------
 function runLong(box, ex, ctx){
-  const items = parseSeq(ex.seq).filter(i=>i.n!=null), R = exShell(box, ex), band = ex.band||[55,95], hold = ex.hold||4;
+  const items = parseSeq(ex.seq).filter(i=>i.n!=null), R = exShell(box, ex), band = calBand(ex.band||[55,95]), hold = ex.hold||4;
   let pos = 0, holdStart = 0, samples = []; const stats = [], marks = items.map(()=>({})), events = []; const br = breathRecorder();
   R.barw.hidden = false;
-  const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); mountStaff(R.staff, items, {marks}); setFocus(R, pos<items.length?items[pos].n:null); };
+  const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); scoreView(R.staff, items, {marks}).focusIndex(pos); setFocus(R, pos<items.length?items[pos].n:null); };
+  viewToggle(R.staff, ()=>render());
   setHint(R, `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
   const off = listen((type,d)=>{
     if(pos>=items.length) return;
@@ -200,7 +202,9 @@ function runLong(box, ex, ctx){
       const inBand = xs.length ? xs.filter(v=>v>=band[0]&&v<=band[1]).length/xs.length : 1;
       const stab = clamp(Math.round(100 - s*4 - (1-inBand)*45), 0, 100);
       stats.push(stab); marks[pos].cls = stab>=80?'ok':stab>=60?'warn':'bad'; marks[pos].top = String(stab);
-      setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}`, stab>=80?'ok':'warn');
+      const bc = Settings.biteCC != null && typeof CCMON !== 'undefined' ? CCMON[Settings.biteCC] : null, bh = bc ? bc.hist.filter(h=>h[0] > holdStart + 350).map(h=>h[1]) : [];
+      const biteSwing = bh.length > 3 ? Math.max(...bh) - Math.min(...bh) : 0;
+      setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}${biteSwing > 25 ? ' Прикус коливався: розслаб губи, не стискай мундштук.' : ''}`, stab>=80 && biteSwing <= 25 ?'ok':'warn');
       holdStart = 0; pos++; render(); if(pos>=items.length) finish();
     }
   });
@@ -218,7 +222,7 @@ function runRhythm(box, ex, ctx){
   const R = exShell(box, ex, `
     <label class="muted">Темп <input type="number" data-c="bpm" min="30" max="260" value="${bpm}"></label>
     <label class="muted"><input type="checkbox" data-c="guide" ${Settings.guide?'checked':''}> мелодія-підказка</label>
-    ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.audio?'':'checked'}> фонограма</label>`:''}
+    ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.audio || (ex.tracks&&ex.tracks.length)?'':'checked'}> фонограма</label>`:''}
     ${ex.audio?`<label class="muted"><input type="checkbox" data-c="minus" checked> мінусовка</label>`:''}
     <label class="muted"><input type="checkbox" data-c="click" ${ex.chords && ex.style!=='classical' ? '' : 'checked'}> метроном</label>
     <label class="muted"><input type="checkbox" data-c="auto"> авто-темп</label>
@@ -228,28 +232,38 @@ function runRhythm(box, ex, ctx){
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
   C.auto.checked = !!LS.get('auto.'+ex.key, false);
   const PICK0 = ex.pickup ?? pickupOf(ex.chords, beats); let pickup = PICK0;
-  let layout = mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup}); const br = breathRecorder();
+  const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, chordLabels: chordLabelsOf(secChords)});
+  let layout = scoreView(R.staff, items, vopts()); const br = breathRecorder();
+  viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); });
   let run = null, played = [], events = [], listenH = null;
   trackChips(box.querySelector('.focus'), ex, ()=> (run && run.mix) || (listenH && listenH.mix) || null);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   const trk = () => secTracks && secTracks.length ? {list:secTracks, muted:ex.muted} : null;
-  let looping = false;
-  function applySection(){ const s = SEC ? SEC.range() : null;
+  let looping = false, resumeRange = null, hadPause = false, pausedRange = null;
+  function applySection(){ const s = resumeRange || (SEC ? SEC.range() : null);
     if(!s){ items = FULL; total = FULL_TOTAL; secStart = 0; secChords = ex.chords; secTracks = ex.tracks; pickup = PICK0; }
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
-    layout = mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup}); }
+    layout = scoreView(R.staff, items, vopts()); }
   if(SEC) SEC.onChange = () => { if(!run) applySection(); };
   setFocus(R, items.find(i=>i.n!=null).n);
   setHint(R, ex.artic==='legato' ? 'Legato: не перериваєш повітря між нотами, міняєш лише пальці.' : ex.artic==='staccato' ? 'Staccato: коротка нота і пауза, кожну зупиняй язиком.' : 'Після одного такту рахунку грай разом із метрономом.');
   C.listen.onclick = () => { if(listenH){ listenH.stop(); MinusAudio.stop(); } if(!run) applySection(); listenH = (secChords || trk() || ex.audio) ? schedule({bpm:+C.bpm.value||ex.bpm, beats, countIn:0, totalBeats:total, seq:items, guide:true, swing:ex.swing, clickOn:false, backing: secChords && (!C.back || C.back.checked) ? {chords:secChords, style:ex.style} : null, tracks:trk()}) : playSeq(items, +C.bpm.value, {swing:ex.swing, stacc:ex.artic==='staccato'}); if(ex.audio && (!C.minus || C.minus.checked) && listenH.t0Perf) MinusAudio.startAt(ex.audio, listenH.t0Perf, secStart, +C.bpm.value||ex.bpm); };
   C.go.onclick = () => start();
+  // пауза: зупиняємо на поточному такті, продовжуємо з його початку після відліку
+  const BARS = barStartsOf(FULL_TOTAL, beats, PICK0);
+  function pause(){ if(!run) return false; const beat = Math.max(0, (now() - run.t0Perf)/run.spbMs), abs = secStart + Math.min(beat, total), end = secStart + total;
+    let b0 = BARS[0]; for(const b of BARS) if(b <= abs + 1e-6) b0 = b; if(b0 < secStart) b0 = secStart;
+    looping = false; run.stop(); run = null; MinusAudio.stop(); hadPause = true; pausedRange = b0 < end - 1e-6 ? [b0, end] : null;
+    const bar = BARS.indexOf(b0) + 1; C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
+  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; start(); return true; }
   function start(){
-    if(run){ looping = false; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); C.go.textContent = 'Почати'; C.go.disabled = false; return; }
-    const again = looping; applySection(); looping = !!(SEC && SEC.loop());
+    if(run){ pause(); return; }
+    if(pausedRange){ resume(); return; }
+    const again = looping; applySection(); resumeRange = null; looping = !!(SEC && SEC.loop()) && !hadPause;
     bpm = clamp(+C.bpm.value||ex.bpm, 30, 260); C.bpm.value = bpm; if(!again) R.result.innerHTML=''; played = []; events = [];
     run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:items, guide:true, guideOn:C.guide.checked, swing:ex.swing, clickOn:C.click.checked, pickup, backing: C.back&&C.back.checked&&secChords ? {chords:secChords, style:ex.style} : null, tracks:trk()});
     if(ex.audio && (!C.minus || C.minus.checked)) MinusAudio.startAt(ex.audio, run.t0Perf, secStart, bpm);
-    C.go.textContent = '■ Стоп'; if(C.rec.checked) recStart(ex.title+' · '+bpm+' bpm');
+    C.go.textContent = '⏸ Пауза'; if(C.rec.checked && !Rec.mr) recStart(ex.title+' · '+bpm+' bpm');
   }
   const off = listen((type,d)=>{
     if(!run) return;
@@ -260,8 +274,8 @@ function runRhythm(box, ex, ctx){
     R.cvval.textContent = Live.breath;
     if(!run){ drawTrace(R.cv, {hist:br.hist, events}); return; }
     const beat = (t - run.t0Perf)/run.spbMs;
-    if(beat < 0){ const cd = countdownText(beat, run.spbMs, beats); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + (items.find(i=>i.n!=null) ? withKeys(items.find(i=>i.n!=null).n) : '')); }
-    else if(beat < total){ const x = layout.beatToX(beat), cur = box.querySelector('#cursor'); if(cur){ cur.setAttribute('x1',x); cur.setAttribute('x2',x); } scrollStaff(R.staff, x);
+    if(beat < 0){ if(layout.kind==='roll') layout.update(beat); const cd = countdownText(beat, run.spbMs, beats); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + (items.find(i=>i.n!=null) ? withKeys(items.find(i=>i.n!=null).n) : '')); }
+    else if(beat < total){ layout.update(beat);
       let p=0; for(const it of items){ if(beat < p+it.d){ if(it.n!=null) setFocus(R, it.n); break; } p+=it.d; } setHint(R,''); }
     const bt = []; for(let b=0;b<=total;b++) bt.push(run.t0Perf + b*run.spbMs);
     drawTrace(R.cv, {hist:br.hist, events, beats:bt, t0:run.t0Perf - beats*run.spbMs, t1:run.endPerf + 300});
@@ -277,7 +291,7 @@ function runRhythm(box, ex, ctx){
       cnt++; let best = -1, bd = 1e9;
       played.forEach((p,j)=>{ if(used.has(j)) return; const dt = p.t-on; if(Math.abs(dt) < spb*0.5 && Math.abs(dt) < Math.abs(bd)){ bd = dt; best = j; } });
       if(best<0){ marks[i] = {cls:'bad', top:'пропущено'}; res.push(null); return; }
-      used.add(best); const p = played[best], m = matchNote(p.n, it.n), a = Math.abs(bd);
+      used.add(best); const p = played[best], m = ex.anyPitch ? {ok:true} : matchNote(p.n, it.n), a = Math.abs(bd);
       let s = m.ok ? (a<=tol?1:a<=tol*2?0.6:0.3) : 0.15; sum += s; if(m.ok) errs.push(bd); else { wrong.push(it.n); noteWrong(it.n); }
       marks[i] = {cls: !m.ok?'bad':a<=tol?'ok':'warn', top: m.ok ? (bd>=0?'+':'−')+Math.round(a) : pcName(p.n-Settings.offset)};
       res.push({p, on, it, i});
@@ -295,7 +309,7 @@ function runRhythm(box, ex, ctx){
           if(len <= a.it.d*spb*0.65 && (minB<20 || a.p.off)) good++; } }
       artic = tot ? good/tot*100 : 100; }
     const score = artic==null ? noteScore : noteScore*0.65 + artic*0.35;
-    mountStaff(R.staff, items, {rhythmic:true, beats, den:ex.den, pickup, marks});
+    layout = scoreView(R.staff, items, {...vopts(), marks}); layout.update(total);
     if(SEC) SEC.record(items, marks, secStart);
     const mErr = mean(errs), aErr = mean(errs.map(Math.abs));
     let advice = [];
@@ -306,10 +320,12 @@ function runRhythm(box, ex, ctx){
     const pass = ex.pass||75;
     if(score >= pass && (C.auto.checked || looping)){ const nb = Math.min(bpm+(SEC?SEC.step():4), ex.maxBpm||Math.round(ex.bpm*1.6)); C.bpm.value = nb; LS.set('tempo.'+ex.key, nb); advice.push(`Авто-темп: наступна спроба на ${nb} bpm.`); }
     LS.set('auto.'+ex.key, C.auto.checked);
+    const paused = hadPause; hadPause = false; if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
     showResult(R, {score, pass, bpm, advice: advice.join(' ') || 'Чисто і рівно в темпі.',
-      stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, ctx);
+      stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, paused ? Object.assign({}, ctx, {done:()=>{}}) : ctx);
   }
-  return ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  const cleanup = ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  cleanup.pause = pause; cleanup.resume = resume; return cleanup;
 }
 
 // ---------- 4. Динаміка ----------

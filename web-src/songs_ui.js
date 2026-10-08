@@ -21,11 +21,11 @@ function songPlay(v, s){
   const items = parseSeq(s.seq), total = items.reduce((a,b)=>a+b.d,0), uniq = [...new Set(items.filter(i=>i.n!=null).map(i=>i.n))].sort((a,b)=>a-b);
   v.innerHTML = `<a href="#" id="back">← Популярні мелодії</a>
     <h2 class="title">${esc(s.title)}</h2><p class="sub">${esc(s.origin)}. ${noteText(esc(s.about))}</p>
-    <div class="steps"><button id="t0" aria-current="true">Про мелодію</button><button id="t1">Ноти у своєму темпі</button><button id="t2">З фонограмою</button><button id="t3">Режим виступу</button></div>
+    <div class="steps"><button id="t0" aria-current="true">Про мелодію</button><button id="t1">Ноти у своєму темпі</button><button id="t4">Очікування</button><button id="t2">З фонограмою</button><button id="t3">Режим виступу</button></div>
     <div class="grid2"><div id="box"></div><aside id="side"></aside></div>`;
   Side.mount($('side')); $('back').onclick = e=>{ e.preventDefault(); go('songs'); };
   let stop = null;
-  const tabs = k => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); const box = $('box');
+  const tabs = k => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); $('t4').setAttribute('aria-current', false); const box = $('box');
     if(k===0){
       box.innerHTML = `<div class="theory">
         <div class="row" style="margin:6px 0 14px"><button class="primary" id="pl">▶ Послухати з фонограмою</button>
@@ -51,6 +51,8 @@ function songPlay(v, s){
         bpm:Math.round(s.bpm*0.8), maxBpm:s.maxBpm, tol:85, chords:s.chords, style:s.style, key:'songs.'+s.id, pass:75, allowLoop:true},
         {done:res=>saveSongBest(s.id, 'play', res.score, res.bpm), again:()=>tabs(2), next:()=>tabs(2)});
     } };
+  $('t4').onclick = () => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', false)); $('t4').setAttribute('aria-current', true);
+    stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Фонограма грає далі лише тоді, коли ти береш правильну ноту.', seq:s.seq, beats:s.beats, den:s.den, bpm:s.bpm, chords:s.chords, style:s.style, key:'wait.songs.'+s.id, pass:80}, {done(){}, again:()=>$('t4').click(), next:()=>tabs(2)}); };
   [0,1,2].forEach(i=>$('t'+i).onclick = ()=>tabs(i)); $('t3').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, den:s.den, chords:s.chords, style:s.style, back:['songs', s.id]}); tabs(0);
   UI.cleanup = ()=>{ if(stop) stop(); };
 }

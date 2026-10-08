@@ -73,8 +73,9 @@ const hz2midi = hz => 69 + 12*Math.log2(hz/Settings.a4);
 const midi2hz = m => Settings.a4 * Math.pow(2,(m-69)/12);
 
 // ---------- Шина подій вводу ----------
-const Hub = { subs:new Set(), on(f){ this.subs.add(f); return ()=>this.subs.delete(f); },
-  emit(type, d){ this.subs.forEach(f=>{ try{ f(type,d); }catch(e){ console.error(e); } }); } };
+// paused: під час паузи вправи гра на інструменті не зараховується (ноти й дихання не доходять до вправ)
+const Hub = { subs:new Set(), paused:false, on(f){ this.subs.add(f); return ()=>this.subs.delete(f); },
+  emit(type, d){ if(this.paused && (type==='on' || type==='off' || type==='breath')) return; this.subs.forEach(f=>{ try{ f(type,d); }catch(e){ console.error(e); } }); } };
 const Live = { breath:0, breathSrc:'', note:null, cents:null, hz:0, db:-100, lastMidiNote:0, lastMidiBreath:0,
   midiNames:[], micOn:false, vib:null, centroid:0, activity:0 };
 
@@ -95,6 +96,7 @@ function onMidi(e){
   const [st,d1,d2] = e.data, type = st & 0xf0, t = now() - Settings.latMidi;
   if(type===0x90 && d2>0){ Live.lastMidiNote = t; if(useMidiNotes()) emitNoteOn(d1, t, 'midi'); }
   else if(type===0x80 || (type===0x90 && d2===0)){ if(useMidiNotes()) emitNoteOff(d1, t, 'midi'); }
+  if(type===0xB0) Hub.emit('cc', {num:d1, v:d2, t});
   else if(type===0xB0 && (d1===2||d1===11||d1===7)){ midiSeen['cc'+d1]=1; if(d1===2 || (!midiSeen.cc2 && (d1===11 || !midiSeen.cc11))) emitBreath(d2, t, 'midi'); }
   else if(type===0xD0){ midiSeen.at=1; if(!midiSeen.cc2 && !midiSeen.cc11) emitBreath(d1, t, 'midi'); }
   else if(type===0xE0){ const v = (d2<<7)|d1; Hub.emit('bend', {cents:(v-8192)/8192*Settings.bendRange*100, t}); }
@@ -335,3 +337,8 @@ function countInBars(bpm, beats){ const secs = Settings.countInSec ?? 5; if(!(se
 // текст відліку: секунди до вступу і поточна доля такту
 function countdownText(beat, spbMs, beats){ const left = Math.ceil(-beat*spbMs/1000), inBar = ((Math.floor(beat) % beats) + beats) % beats + 1;
   return { secs: left, text: `Вступ через ${left} с · ${Array.from({length:beats},(_,i)=>i+1===inBar?'<'+(i+1)+'>':i+1).join(' ').replace(/<(\d)>/,'[$1]')}` }; }
+
+// спільні помічники, потрібні вже під час першого показу програми
+var TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
+function totalMin(){ return Object.values(Progress.days||{}).reduce((a,b)=>a+b,0); }
+function songsPassed(){ return Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length; }

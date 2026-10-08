@@ -8,3 +8,5 @@ lamejs — кодер MP3 на JavaScript, ліцензія LGPL 3.0 (https://gi
 Шрифти IBM Plex Sans, Spectral, Noto Music — SIL Open Font License 1.1.
 
 Electron — ліцензія MIT.
+
+JSZip 3.10.1 — ліцензія MIT (https://github.com/Stuk/jszip). Використовується для відкриття файлів .mxl.

@@ -11,6 +11,8 @@ function buildReport(){
     weak.length ? 'Найчастіші помилки: '+weak.map(([k,c])=>`${withKeys(parseNote(k.replace('♯','#').replace('♭','b')).midi)} ×${c}`).join('; ')+'.' : '',
     rd ? `Читання нот: ${rd.avg} с на ноту, точність ${rd.acc}%.` : '',
     heat.length ? 'Карта тактів: '+heat.join('; ')+'.' : '',
+    (Progress.journal||[]).length ? 'Нотатки учня: '+(Progress.journal||[]).slice(0,5).map(j=>`${new Date(j.at).toLocaleDateString('uk-UA')}: ${j.text}`).join(' | ') : '',
+    (()=>{ const tr = typeof transStats==='function' ? transStats(5).filter(r=>r.rate>0.1).slice(0,5) : []; return tr.length ? 'Переходи з проміжними нотами: '+tr.map(r=>`${pcName(r.a)}→${pcName(r.b)} ${Math.round(r.rate*100)}%`).join(', ')+'.' : ''; })(),
     'Останні спроби:', ...(Progress.log||[]).slice(0,25).map(r=>`  ${new Date(r.at).toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${r.lesson} ${r.ex}: ${r.score}${r.bpm?' на '+r.bpm+' bpm':''}`)].filter(Boolean).join('\n');
 }
 function teacherContext(){ const L = Settings.labels;
@@ -19,8 +21,8 @@ function teacherContext(){ const L = Settings.labels;
 Коли згадуєш ноту, завжди пиши її разом з клавішами у форматі «G (${L.L1} ${L.L2} ${L.L3})».
 Запис нот у застосунку: нота:тривалість у долях, наприклад G4:1 A4:0.5 B4:0.5 r:1 C5:2 (r — пауза, # — дієз, b — бемоль). Акорди: G:4 Am:2 D7:2.
 
-${buildReport()}`; }
-const TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
+${buildReport()}${(()=>{ const prev = TeacherLog.get().slice(0,3); return prev.length ? '\n\nТвої попередні поради цьому учневі (від нових до старих). Звір зі звітом, що з них виконано, і скажи про це одним-двома реченнями:\n' + prev.map(x=>`— ${new Date(x.at).toLocaleDateString('uk-UA')}, «${x.q.slice(0,60)}»: ${x.a.replace(/\s+/g,' ').slice(0,500)}`).join('\n') : ''; })()}`; }
+
 async function askClaude(prompt){
   if(DESKTOP && window.ewiStore.claudeAsk) return window.ewiStore.claudeAsk(prompt);
   try{ await navigator.clipboard.writeText(prompt); }catch(e){}
@@ -48,7 +50,8 @@ function viewTeacher(v){
       if(!r.ok){ $('tOut').innerHTML = `<div class="panel"><b>Не вдалося отримати відповідь.</b><p class="muted">${esc(r.error||'')}</p></div>`; return; }
       const text = after ? after(r.text) : r.text; TeacherLog.add(label, text); $('tOut').innerHTML = `<div class="panel theory">${mdLite(text)}</div>`; hist(); }
     finally{ $('tBusy').textContent = ''; ['tRev','tEt','tAsk'].forEach(i=>$(i).disabled = false); } };
-  $('tRev').onclick = () => run('Розбір прогресу', teacherContext() + `\n\nЗроби розбір мого прогресу: що виходить добре, що гальмує, і дай конкретний план на наступні 7 днів по 20–30 хвилин на день із прив'язкою до уроків і вправ застосунку. Без загальних порад.`);
+  $('tRev').onclick = () => { Progress.lastReview = Date.now(); saveProgress(); run('Розбір прогресу', teacherContext() + `\n\nЗроби розбір мого прогресу: що виходить добре, що гальмує, і дай конкретний план на наступні 7 днів по 20–30 хвилин на день із прив'язкою до уроків і вправ застосунку. Без загальних порад.`); };
+  if(UI.autoReview){ UI.autoReview = false; setTimeout(()=>$('tRev').click(), 300); }
   $('tAsk').onclick = () => { const q = $('tQ').value.trim(); if(!q) return; run(q, teacherContext() + `\n\nПитання учня: ${q}`); };
   $('tEt').onclick = () => run('Етюд під слабкі місця', teacherContext() + `\n\nСклади ОРИГІНАЛЬНИЙ короткий етюд (8 тактів, розмір 4/4), який тренує мої слабкі ноти й переходи зі звіту. Не використовуй і не імітуй відомі мелодії. Діапазон D4–D5, темп 60–90.
 Відповідай ЛИШЕ JSON без пояснень і без markdown: {"title":"…","bpm":72,"beats":4,"seq":"G4:1 …","chords":"G:4 …","style":"pop","tips":["…","…"]}.
@@ -61,3 +64,9 @@ function viewTeacher(v){
       return `**Етюд «${j.title}» додано в «Мій репертуар».**\n\n${(j.tips||[]).map(t=>'- '+t).join('\n')}`;
     }catch(e){ return 'Вчитель відповів, але етюд не вдалося розібрати. Спробуй ще раз.\n\n' + text; } });
 }
+
+// раз на тиждень пропонуємо розбір, якщо була практика
+setTimeout(()=>{ try{
+  const last = Progress.lastReview || 0, week = Object.entries(Progress.days||{}).filter(([d])=>Date.now() - new Date(d).getTime() < 7*864e5).reduce((a,[,m])=>a+m,0);
+  if(Date.now() - last > 7*864e5 && week >= 30) toast(`За тиждень ${Math.round(week)} хв практики. Вчитель може зробити розбір і план на наступний тиждень.`, [['Отримати розбір', ()=>{ UI.autoReview = true; go('teacher'); }]]);
+}catch(e){} }, 6000);

@@ -16,8 +16,8 @@ const BADGES = [
   ['read2', 'Читання з листа', 'Тренажер нот: менше 0,8 с на ноту при точності від 90%', () => (Progress.reading||[]).some(r=>r.avg < 0.8 && r.acc >= 90)],
   ['daily5', 'П\'ять занять дня', 'Завершити 5 занять дня', () => Object.keys(Progress.daily||{}).length >= 5],
 ];
-const totalMin = () => Object.values(Progress.days||{}).reduce((a,b)=>a+b,0);
-const songsPassed = () => Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length;
+
+
 function checkBadges(){
   Progress.badges = Progress.badges || {}; const fresh = [];
   for(const [id, title, , test] of BADGES){ if(Progress.badges[id]) continue; let ok = false; try{ ok = test(); }catch(e){} if(ok){ Progress.badges[id] = Date.now(); fresh.push(title); } }

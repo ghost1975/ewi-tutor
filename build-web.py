@@ -2,8 +2,7 @@
 import re, os, sys
 try: sys.stdout.reconfigure(encoding='utf-8')
 except Exception: pass
-ORDER = ['core.js','soundfont.js','backing.js','multitrack.js','section.js','engine.js','curriculum.js','songs_data.js','curriculum_more.js','curriculum_cool.js',
-         'curriculum_extra.js','songs_more.js','ui.js','songs_ui.js','rep_extra.js','perform.js','reading.js','daily.js','badges.js','teacher.js']
+ORDER = ['core.js', 'soundfont.js', 'backing.js', 'multitrack.js', 'section.js', 'view.js', 'engine.js', 'chords.js', 'musicxml.js', 'pitchshift.js', 'curriculum.js', 'songs_data.js', 'curriculum_more.js', 'curriculum_cool.js', 'curriculum_extra.js', 'songs_more.js', 'ui.js', 'songs_ui.js', 'rep_extra.js', 'perform.js', 'reading.js', 'daily.js', 'badges.js', 'teacher.js', 'wait.js', 'trans.js', 'calib.js', 'rtrainer.js', 'practice.js']
 S = 'web-src/'
 t = open(S+'template.html', encoding='utf8').read()
 css = open(S+'style.css', encoding='utf8').read()

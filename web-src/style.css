@@ -146,3 +146,17 @@ textarea.report{width:100%;min-height:160px;background:var(--surface);border:1px
 .lesson-btn .mini{display:block;height:4px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden;max-width:160px}
 .lesson-btn .mini i{display:block;height:100%;background:var(--brass)}
 .here-call{border-left-color:var(--brass)}
+
+.view-toggle{display:flex;gap:6px;align-items:center;margin:0 0 6px}
+.view-toggle button{padding:4px 12px;font-size:13px;border-radius:999px}
+.view-toggle button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.as-roll{overflow:hidden!important}
+canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface)}
+.meter{display:inline-block;width:160px;height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--brass)}
+.practice-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.practice-bar .sp{flex:1}
+.practice-bar button{padding:5px 12px;font-size:13px}
+.practice-bar button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.pb-note{margin:-4px 0 10px}
+.panel.stopped{text-align:center;padding:28px}

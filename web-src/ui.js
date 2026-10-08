@@ -1,5 +1,5 @@
 // ---------- Каркас ----------
-const VIEWS = [['program','Програма'],['daily','Заняття дня'],['songs','Популярні мелодії'],['reading','Тренажер нот'],['teacher','Вчитель'],['analyzer','Аналізатор звуку'],['metro','Метроном'],['rep','Мій репертуар'],['takes','Записи'],['stats','Прогрес'],['settings','Налаштування']];
+const VIEWS = [['program','Програма'],['daily','Заняття дня'],['songs','Популярні мелодії'],['reading','Тренажер нот'],['rhythm','Тренажер ритму'],['trans','Переходи'],['teacher','Вчитель'],['analyzer','Аналізатор звуку'],['metro','Метроном'],['rep','Мій репертуар'],['takes','Записи'],['stats','Прогрес'],['settings','Налаштування']];
 const UI = { view:'program', lesson:null, step:0, cleanup:null };
 const DEF_PASS = {notes:80, long:70, rhythm:75, dyn:65, vibrato:70, echo:70, improv:70};
 const passOf = ex => ex.pass || DEF_PASS[ex.type];
@@ -36,7 +36,7 @@ function go(view, arg){
   UI.view = view;
   document.querySelectorAll('#nav button').forEach(b=>b.setAttribute('aria-current', b.dataset.v===(view==='lesson'?'program':view)));
   const v = $('view'); v.innerHTML = ''; scrollTo(0,0);
-  ({program:viewProgram, daily:viewDaily, reading:viewReading, teacher:viewTeacher, perform:viewPerform, songs:viewSongs, lesson:(v,a)=>a && a.lesson ? viewLesson(v, a.lesson, a.step) : viewLesson(v, a), analyzer:viewAnalyzer, metro:viewMetro, rep:viewRep, takes:viewTakes, stats:viewStats, settings:viewSettings})[view](v, arg);
+  ({program:viewProgram, daily:viewDaily, reading:viewReading, rhythm:viewRhythmTrainer, trans:viewTrans, teacher:viewTeacher, perform:viewPerform, songs:viewSongs, lesson:(v,a)=>a && a.lesson ? viewLesson(v, a.lesson, a.step) : viewLesson(v, a), analyzer:viewAnalyzer, metro:viewMetro, rep:viewRep, takes:viewTakes, stats:viewStats, settings:viewSettings})[view](v, arg);
 }
 
 // ---------- Прогрес уроків ----------
@@ -58,10 +58,12 @@ function viewProgram(v){
     <p class="sub">${done} з ${LESSONS.length} уроків пройдено. ${next?`Наступний: <a href="#" id="goNext">${esc(next.id+' '+next.title)}</a>.`:'Програму завершено.'}</p>
     <div class="progressbar"><i style="width:${done/LESSONS.length*100}%"></i></div>
     ${resume?`<div class="callout here-call row" style="justify-content:space-between"><span>${last?`Ти зупинився на уроці <b>${esc(last.id+' '+last.title)}</b>${lessonDone(last)?', його пройдено':`, ${last.ex.filter((e,i)=>(lp(last.id).best[i]||0)>=passOf(e)).length} з ${last.ex.length} вправ`}.`:'Почни з першого уроку.'}${resume.lesson!==last?` Далі: ${esc(resume.lesson.id+' '+resume.lesson.title)}.`:''}</span><button class="primary" id="goResume">Продовжити</button></div>`:''}
+    ${(()=>{ const last = TeacherLog.get().find(x=>x.q==='Розбір прогресу'); const stale = !last || Date.now() - last.at > 7*864e5; return stale && totalMin() >= 60 ? `<div class="callout row" style="justify-content:space-between"><span>${last?'Минуло понад тиждень від останнього розбору з вчителем.':'Ти вже маєш понад годину практики: час для першого розбору з вчителем.'}</span><button id="goTeach">Розбір з вчителем</button></div>` : ''; })()}
     <div class="callout row" style="justify-content:space-between"><span>${(Progress.daily||{})[today()] ? 'Заняття дня вже пройдено. Можна продовжити урок або пограти мелодії.' : 'Не знаєш, з чого почати? Заняття дня на 20 хвилин зібране з твого прогресу.'}</span><button class="primary" id="goDaily">Заняття дня</button></div>
     ${!Live.midiNames.length && !Live.micOn ? '<div class="callout">Підключи EWI кабелем USB-C або увімкни мікрофон угорі. Без інструмента можна перевірити все з клавіатури: A S D F грають D E F F♯, 1–8 грають G4…G5, [ і ] змінюють силу «дихання».</div>':''}
     <div id="levels"></div>`;
   $('goDaily').onclick = ()=>go('daily');
+  if($('goTeach')) $('goTeach').onclick = ()=>go('teacher');
   if(resume) $('goResume').onclick = ()=>go('lesson', resume);
   if(next) $('goNext').onclick = e=>{ e.preventDefault(); go('lesson', next); };
   LEVELS.forEach(L=>{
@@ -149,8 +151,9 @@ function viewAnalyzer(v){
       <div class="stats" id="aStats"></div>
       <div class="cv"><div class="lbl"><span>Висота відносно найближчої ноти, 8 секунд</span><span>±50 центів</span></div><canvas id="pTrace" class="tall"></canvas></div>
       <div class="cv"><div class="lbl"><span>Спектр</span><span>50 Гц – 8 кГц</span></div><canvas id="spec"></canvas></div>
+      <div id="ccHost"></div>
     </div><aside id="side"></aside></div>`;
-  Side.mount($('side'));
+  Side.mount($('side')); ccPanel($('ccHost'));
   (async()=>{ try{ const ds = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
     ds.forEach(d=>{ const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || 'Вхід '+d.deviceId.slice(0,6); $('micSel').appendChild(o); }); $('micSel').value = Settings.micId||''; }catch(e){} })();
   $('micGo').onclick = async()=>{ Settings.micId = $('micSel').value; saveSettings(); try{ await micStart(Settings.micId); $('micGo').textContent='Перезапустити мікрофон'; }catch(e){ alert('Мікрофон недоступний: '+e.message); } };
@@ -255,8 +258,8 @@ function viewRep(v, open){
   if(open){ const s = songs.find(x=>x.id===open); if(s){ return repPlay(v, s); } }
   v.innerHTML = `<h2 class="title">Мій репертуар</h2>
     <p class="sub">Додай мелодії, які хочеш вивчити: MIDI-файл або ручний запис нот. Кожна мелодія стає вправою з метрономом, авто-темпом і аналізом.</p>
-    <div class="panel"><h3 style="margin-top:0">Імпорт MIDI</h3>
-      <div class="row"><input type="file" id="mf" accept=".mid,.midi"><label class="muted">Квантування <select id="mq"><option value="0.5">восьмі</option><option value="0.25" selected>шістнадцяті</option></select></label></div>
+    <div class="panel"><h3 style="margin-top:0">Імпорт MIDI або MusicXML</h3>
+      <div class="row"><input type="file" id="mf" accept=".mid,.midi,.musicxml,.xml,.mxl"><label class="muted">Квантування <select id="mq"><option value="0.5">восьмі</option><option value="0.25" selected>шістнадцяті</option></select></label></div>
       <div id="mfOut"></div><p class="hint" id="mfInfo"></p>
       <h3>Ручний запис</h3>
       <p class="muted">Формат: нота:тривалість у долях. Наприклад <code>G4:1 A4:0.5 B4:0.5 r:1 C5:2</code>, де r означає паузу, # дієз, b бемоль.</p>
@@ -277,7 +280,7 @@ function viewRep(v, open){
       $('sList').appendChild(r); }); };
   list();
   $('mf').onchange = async e => { const f = e.target.files[0]; if(!f) return;
-    try{ const m = readMidiFile(await f.arrayBuffer()); if(!m.tracks.length) throw new Error('У файлі немає нот');
+    try{ const m = await readScoreFile(f); if(!m.tracks.length) throw new Error('У файлі немає нот');
       const cand = m.tracks.map((t,i)=>i).filter(i=>!m.tracks[i].drums);
       let lead = cand.find(i=>LEAD_RX.test(m.tracks[i].name)); if(lead==null) lead = cand.reduce((bi,i)=>m.tracks[i].notes.length>m.tracks[bi].notes.length?i:bi, cand[0]);
       $('mfOut').innerHTML = `<table class="fing" style="margin-top:10px"><tr><th>Моя партія</th><th>Супровід</th><th>Доріжка</th><th>Нот</th></tr>
@@ -288,9 +291,12 @@ function viewRep(v, open){
       $('mUse').onclick = ()=>{ const li = +$('mfOut').querySelector('[name=mlead]:checked').value;
         const acc = [...$('mfOut').querySelectorAll('[data-acc]:checked')].map(c=>+c.dataset.acc).filter(i=>i!==li);
         PendingTracks = acc.map(i=>midiTrackToBeats(m.tracks[i], m.div));
-        $('sSeq').value = midiToSeq(m.tracks[li], m.div, +$('mq').value, PendingTracks.length>0); $('sBpm').value = m.bpm; $('sTitle').value = f.name.replace(/\.midi?$/i,'');
+        $('sSeq').value = midiToSeq(m.tracks[li], m.div, +$('mq').value, PendingTracks.length>0); $('sBpm').value = m.bpm; $('sTitle').value = f.name.replace(/\.(midi?|musicxml|xml|mxl)$/i,'');
         if([2,3,4,6].includes(m.tsig)) $('sBeats').value = String(m.tsig);
-        $('mfInfo').textContent = PendingTracks.length ? `Разом з мелодією збережеться супровід: ${PendingTracks.map(t=>t.name).join(', ')}.` : ''; };
+        const seqTotal = parseSeq($('sSeq').value).reduce((x,y)=>x+y.d,0);
+        const ch = m.chords || (PendingTracks.length ? detectChords(PendingTracks, seqTotal, m.tsig||4) : null);
+        if(ch && !$('sCh').value.trim()){ $('sCh').value = ch; }
+        $('mfInfo').textContent = (PendingTracks.length ? `Разом з мелодією збережеться супровід: ${PendingTracks.map(t=>t.name).join(', ')}. ` : '') + ($('sCh').value.trim() ? (m.chords ? 'Акорди взято з партитури.' : 'Акорди визначено автоматично з доріжок, їх можна поправити.') : ''); };
     }catch(err){ $('mfOut').innerHTML = `<p class="hint bad">${esc(err.message)}</p>`; } };
   $('sSave').onclick = () => { const seq = $('sSeq').value.trim(), items = parseSeq(seq);
     if(!items.length || items.some(i=>i.s!=='r' && i.n==null) || items.some(i=>!(i.d>0))){ $('sErr').textContent = 'Перевір запис: кожна нота має бути у форматі G4:1.'; return; }
@@ -337,10 +343,13 @@ function viewStats(v){
     <h3>Останні 7 днів</h3><div class="row" style="align-items:flex-end;height:120px;gap:14px">${days.map(d=>`<div style="text-align:center;flex:1;max-width:60px"><div style="background:var(--brass);height:${Math.max(2,d[1]/maxM*90)}px;border-radius:4px 4px 0 0"></div><div class="muted">${esc(d[0])}</div><div class="muted">${Math.round(d[1])}</div></div>`).join('')}</div>
     <h3>Рівні</h3>${LEVELS.map(L=>{ const ls = LESSONS.filter(l=>l.lvl===L.n), d = ls.filter(lessonDone).length; return `<div>${L.n}. ${esc(L.title)} <span class="muted">${d}/${ls.length}</span><div class="progressbar"><i style="width:${d/ls.length*100}%"></i></div></div>`; }).join('')}
     <h3>Ноти, на яких найчастіше помилки</h3>${weak.length?`<table><tr><th>Нота з клавішами</th><th>Помилок</th></tr>${weak.map(([k,c])=>`<tr><td>${esc(withKeys(parseNote(k.replace('♯','#').replace('♭','b')).midi))} <span class="muted">${esc(k)}</span></td><td>${c}</td></tr>`).join('')}</table>`:'<p class="muted">Поки немає даних.</p>'}
+    <h3>Журнал занять</h3><div class="row"><textarea class="report" id="jT" style="min-height:56px;flex:1" placeholder="Що сьогодні вийшло, що заважало, що помітив у звуці…"></textarea><button id="jS">Зберегти</button></div>
+    <div id="jL">${(Progress.journal||[]).slice(0,10).map(j=>`<p class="muted" style="margin:6px 0"><b>${new Date(j.at).toLocaleDateString('uk-UA')}</b> ${esc(j.text)}</p>`).join('') || '<p class="muted">Записів поки немає. Нотатки бачить вчитель у звіті.</p>'}</div>
     <h3>Досягнення</h3>${badgesHTML()}
     <h3>Звіт для розбору</h3><p class="muted">Цей звіт бачить вчитель. Його можна й скопіювати в будь-який чат.</p>
     <textarea class="report" id="rep" readonly></textarea><div class="row" style="margin-top:8px"><button id="cp">Скопіювати звіт</button></div>`;
   $('rep').value = buildReport();
+  $('jS').onclick = () => { const tx = $('jT').value.trim(); if(!tx) return; journalAdd(tx); go('stats'); };
   $('cp').onclick = async()=>{ try{ await navigator.clipboard.writeText($('rep').value); }catch(e){ $('rep').select(); document.execCommand('copy'); } $('cp').textContent = 'Скопійовано'; setTimeout(()=>$('cp').textContent='Скопіювати звіт',1500); };
 }
 
@@ -360,6 +369,8 @@ function viewSettings(v){
     <div class="row" style="margin-top:10px"><button id="sCal">Калібрувати октаву</button><span class="muted" id="sCalT">Зсув: ${Settings.offset} півтонів</span></div>
     <h3>Затримка</h3><p class="muted">Компенсує час між звуком і реакцією застосунку. «Виміряти» дає 8 клацань: грай коротку ноту точно на кожне.</p>
     <div class="row"><label>MIDI, мс <input type="number" id="sLm" value="${Settings.latMidi}"></label><label>Мікрофон, мс <input type="number" id="sLa" value="${Settings.latAudio}"></label><button id="sLat">Виміряти</button><span class="muted" id="sLatT"></span></div>
+    <h3>Дихання</h3><div class="row"><button id="sBC">Калібрувати дихання</button><span class="muted" id="sBCT">${Settings.breathCal ? `Тихо ${Settings.breathCal.soft}, звичайно ${Settings.breathCal.mid}, гучно ${Settings.breathCal.loud}.` : 'Не калібровано: використовуються типові значення.'}</span></div><div id="sBCbox"></div>
+    <h3>Вигляд нот</h3><div class="row"><label class="muted">За замовчуванням <select id="sView">${Object.entries(VIEW_NAMES).map(([k,t])=>`<option value="${k}" ${k===(Settings.view||'staff')?'selected':''}>${t}</option>`).join('')}</select></label><span class="muted">Перемикається й прямо над нотами у вправах.</span></div>
     <h3>Відлік перед грою</h3><div class="row"><label class="muted">Рахунок метронома перед вступом, щонайменше <input type="number" id="sCnt" min="0" max="20" value="${Settings.countInSec ?? 5}" style="width:60px"> с</label><span class="muted">0 означає один такт.</span></div>
     <h3>Вивід звуку</h3><div class="row"><label class="muted">Пристрій <select id="sOut"><option value="">Типовий пристрій Windows</option></select></label><button id="sTest">Перевірити звук</button><span class="muted" id="sTestT"></span></div>
     <h3>Звук і аналіз</h3>
@@ -400,6 +411,8 @@ function viewSettings(v){
   $('sOut').onchange = async e=>{ const ok = await setOutput(e.target.value); $('sTestT').textContent = ok ? 'Пристрій змінено. Натисни «Перевірити звук».' : 'Не вдалося перемкнути пристрій.'; };
   $('sTest').onclick = async ()=>{ $('sTestT').textContent = 'Граю три ноти…'; const r = await soundTest();
     $('sTestT').textContent = r.peak > 0.01 ? `Застосунок відтворює звук (рівень ${r.peak}, ${r.rate} Гц, затримка ${r.latency} мс, вивід: ${r.sink}). Якщо не чути, вибери інший пристрій вище або перевір мікшер гучності Windows.` : `Звуку немає всередині застосунку: стан аудіо «${r.state}». Перезапусти застосунок і повідом про це.`; };
+  $('sBC').onclick = () => breathCalibration($('sBCbox'), c=>{ $('sBCT').textContent = `Тихо ${c.soft}, звичайно ${c.mid}, гучно ${c.loud}.`; });
+  $('sView').onchange = e=>{ Settings.view = e.target.value; saveSettings(); };
   $('sCnt').onchange = e=>{ Settings.countInSec = clamp(+e.target.value||0, 0, 20); saveSettings(); };
   $('sUnl').onchange = e=>{ Settings.unlockAll = e.target.checked; saveSettings(); };
   $('sReset').onclick = ()=>{ if(confirm('Скинути весь прогрес уроків і статистику?')){ Progress.lessons = {}; Progress.days = {}; Progress.wrong = {}; Progress.log = []; saveProgress(); go('settings'); } };
@@ -429,3 +442,5 @@ if(DESKTOP){
 
 if(DESKTOP && window.ewiStore.reportPractice){ const rp = () => window.ewiStore.reportPractice(Math.round(Progress.days[today()]||0)); rp(); setInterval(rp, 60000); }
 setTimeout(()=>{ try{ checkBadges(); }catch(e){} }, 2000);
+
+function journalAdd(text){ Progress.journal = Progress.journal || []; Progress.journal.unshift({at:Date.now(), text:text.slice(0,500)}); Progress.journal = Progress.journal.slice(0,200); saveProgress(); }

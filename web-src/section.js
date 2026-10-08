@@ -75,6 +75,7 @@ const MediaStore = {
   db(){ return this._db || (this._db = new Promise((res, rej)=>{ const r = indexedDB.open('ewi-media', 1); r.onupgradeneeded = ()=>r.result.createObjectStore('f'); r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error); })); },
   async put(name, blob){ if(DESKTOP) return window.ewiStore.saveMedia(name, new Uint8Array(await blob.arrayBuffer()));
     const db = await this.db(); await new Promise((res, rej)=>{ const tx = db.transaction('f','readwrite'); tx.objectStore('f').put(blob, name); tx.oncomplete = res; tx.onerror = ()=>rej(tx.error); }); return name; },
+  async pick(a){ return a && a.semis && a.tfile ? a.tfile : a && a.file; },
   async url(name){ if(!name) return null; if(DESKTOP) return 'ewimedia://rep/' + encodeURIComponent(name);
     const db = await this.db(); const blob = await new Promise(res=>{ const r = db.transaction('f').objectStore('f').get(name); r.onsuccess = ()=>res(r.result); r.onerror = ()=>res(null); });
     return blob ? URL.createObjectURL(blob) : null; }
