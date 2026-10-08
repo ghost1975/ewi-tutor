@@ -160,3 +160,7 @@ canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface
 .practice-bar button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .pb-note{margin:-4px 0 10px}
 .panel.stopped{text-align:center;padding:28px}
+
+.pf-row{cursor:pointer}
+.pf-row.from{box-shadow:inset 3px 0 0 var(--ok)}
+.sec-hint{margin:0;font-size:12px}

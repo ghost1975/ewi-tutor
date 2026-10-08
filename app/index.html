@@ -169,6 +169,10 @@ canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface
 .pb-note{margin:-4px 0 10px}
 .panel.stopped{text-align:center;padding:28px}
 
+.pf-row{cursor:pointer}
+.pf-row.from{box-shadow:inset 3px 0 0 var(--ok)}
+.sec-hint{margin:0;font-size:12px}
+
 </style>
 </head>
 <body>
@@ -715,16 +719,17 @@ function heatOf(key){ Progress.heat = Progress.heat || {}; return Progress.heat[
 function heatColor(v){ return v==null ? 'var(--line)' : v >= 0.85 ? 'var(--ok)' : v >= 0.6 ? 'var(--brass)' : 'var(--bad)'; }
 // Панель фрагмента для довгих мелодій: такти з–по, петля, крок темпу, карта тактів
 function sectionUI(box, ex, FULL, beats){
-  if(!ex.allowLoop || !ex.key) return null;
+  if(!ex.key) return null;
   const total = FULL.reduce((a,b)=>a+b.d,0), pickup = ex.pickup ?? pickupOf(ex.chords, beats), starts = barStartsOf(total, beats, pickup), N = starts.length;
-  if(N < 3) return null;
+  if(N < 2) return null;
   const st = Object.assign({a:1, b:N, loop:false, step:4}, LS.get('sec.'+ex.key, {})); st.a = clamp(st.a,1,N); st.b = clamp(st.b,st.a,N);
   const el = document.createElement('div'); el.className = 'section-ui';
-  el.innerHTML = `<div class="row"><span class="muted">Фрагмент: такти</span><input type="number" data-s="a" min="1" max="${N}" value="${st.a}" style="width:60px"><span class="muted">–</span><input type="number" data-s="b" min="1" max="${N}" value="${st.b}" style="width:60px"><span class="muted">з ${N}</span>
+  el.innerHTML = `<div class="row"><span class="muted">Почати з такту</span><input type="number" data-s="a" min="1" max="${N}" value="${st.a}" style="width:60px"><span class="muted">до такту</span><input type="number" data-s="b" min="1" max="${N}" value="${st.b}" style="width:60px"><span class="muted">з ${N}</span>
     <label class="muted"><input type="checkbox" data-s="loop" ${st.loop?'checked':''}> петля</label>
     <label class="muted">крок темпу +<input type="number" data-s="step" min="1" max="20" value="${st.step}" style="width:52px"> bpm</label>
     <button class="small" data-s="weak">Найслабші такти</button><button class="small" data-s="all">Уся мелодія</button></div>
-    <div class="heat" data-s="heat" title="Карта точності по тактах. Натисни такт, щоб вибрати його; із Shift — розширити фрагмент."></div>`;
+    <div class="heat" data-s="heat" title="Такти пісні, колір показує точність. Натисни такт, щоб почати з нього; із Shift — щоб закінчити на ньому."></div>
+    <p class="muted sec-hint">Натисни такт у смузі вище або ноту на нотному стані, щоб почати з цього місця.</p>`;
   box.querySelector('.ex-head').after(el);
   const S = {}; el.querySelectorAll('[data-s]').forEach(x=>S[x.dataset.s]=x);
   const api = { onChange:null };
@@ -733,7 +738,7 @@ function sectionUI(box, ex, FULL, beats){
     S.heat.innerHTML = starts.map((s,i)=>{ const v = h[i] ? h[i][0] : null, sel = i+1>=st.a && i+1<=st.b;
       return `<button class="cell${sel?' sel':''}" data-bar="${i+1}" style="background:${heatColor(v)}" title="Такт ${i+1}${v!=null?`: ${Math.round(v*100)}%`:''}">${(i+1)%4===1?i+1:''}</button>`; }).join('');
     S.heat.querySelectorAll('[data-bar]').forEach(c=>c.onclick = e=>{ const b = +c.dataset.bar;
-      if(e.shiftKey){ S.a.value = Math.min(st.a, b); S.b.value = Math.max(st.b, b); } else { S.a.value = b; S.b.value = b; } save(); }); }
+      if(e.shiftKey){ S.b.value = Math.max(st.a, b); } else { S.a.value = b; if(b > st.b) S.b.value = N; } save(); }); }
   ['a','b','loop','step'].forEach(k=>S[k].onchange = save);
   S.all.onclick = () => { S.a.value = 1; S.b.value = N; S.loop.checked = false; save(); };
   S.weak.onclick = () => { const h = heatOf(ex.key); let best = -1, bv = 2;
@@ -743,6 +748,8 @@ function sectionUI(box, ex, FULL, beats){
   drawHeat();
   api.range = () => (st.a===1 && st.b===N) ? null : [starts[st.a-1], st.b < N ? starts[st.b] : total];
   api.loop = () => st.loop; api.step = () => st.step;
+  api.barOf = beat => { let k = 0; while(k+1 < N && starts[k+1] <= beat + 1e-6) k++; return k + 1; };
+  api.setStart = bar => { S.a.value = clamp(bar, 1, N); if(+S.a.value > st.b) S.b.value = N; save(); };
   api.record = (items, marks, secStart) => { const h = heatOf(ex.key); let cum = secStart;
     const acc = {}; items.forEach((it,i)=>{ const at = cum; cum += it.d; if(it.n==null) return;
       let bar = 0; while(bar+1 < N && starts[bar+1] <= at + 1e-6) bar++;
@@ -776,6 +783,14 @@ const MediaStore = {
     const db = await this.db(); const blob = await new Promise(res=>{ const r = db.transaction('f').objectStore('f').get(name); r.onsuccess = ()=>res(r.result); r.onerror = ()=>res(null); });
     return blob ? URL.createObjectURL(blob) : null; }
 };
+
+// клік по нотному стану: індекс найближчої ноти (лише для вигляду «нотний стан»)
+function scoreClick(host, getLayout, fn){
+  host.addEventListener('click', e=>{ const lay = getLayout(); const svg = host.querySelector('svg'); if(!svg || !lay || !lay.xs) return;
+    const r = svg.getBoundingClientRect(), vb = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width ? svg.viewBox.baseVal.width : (+svg.getAttribute('width') || r.width);
+    const x = (e.clientX - r.left) * vb / r.width; let best = -1, bd = 1e9; lay.xs.forEach((xx,i)=>{ const d = Math.abs(xx - x); if(d < bd){ bd = d; best = i; } });
+    if(best >= 0 && bd < 40) fn(best); });
+}
 
 // ---------- Вигляд нот: нотний стан або нотна стрічка ----------
 const isRoll = () => Settings.view === 'roll' || Settings.view === 'tape';
@@ -1021,8 +1036,10 @@ function runNotes(box, ex, ctx){
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
+  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
+  let lastLay = null;
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
-    const r = scoreView(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
+    const r = scoreView(R.staff, items, {marks:mk}); lastLay = r; const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
     setFocus(R, playing ? (playIdx>=0 ? items[playIdx].n : null) : (pos<items.length?items[pos].n:null)); };
   const stopPlay = () => { if(!playing) return; playing.h.stop(); playing.timers.forEach(clearTimeout); playing = null; playIdx = -1; P.play.textContent = '▶ Програти'; render(); };
   P.play.onclick = () => { if(playing){ stopPlay(); return; }
@@ -1122,6 +1139,8 @@ function runRhythm(box, ex, ctx){
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
     layout = scoreView(R.staff, items, vopts()); }
   if(SEC) SEC.onChange = () => { if(!run) applySection(); };
+  // клік по ноті: почати з такту, в якому вона стоїть
+  if(SEC) scoreClick(R.staff, ()=>layout, i=>{ if(run) return; let b = secStart; for(let k=0;k<i;k++) b += items[k].d; SEC.setStart(SEC.barOf(b)); toast(`Почнеш з такту ${SEC.barOf(b)}.`); });
   setFocus(R, items.find(i=>i.n!=null).n);
   setHint(R, ex.artic==='legato' ? 'Legato: не перериваєш повітря між нотами, міняєш лише пальці.' : ex.artic==='staccato' ? 'Staccato: коротка нота і пауза, кожну зупиняй язиком.' : 'Після одного такту рахунку грай разом із метрономом.');
   C.listen.onclick = () => { if(listenH){ listenH.stop(); MinusAudio.stop(); } if(!run) applySection(); listenH = (secChords || trk() || ex.audio) ? schedule({bpm:+C.bpm.value||ex.bpm, beats, countIn:0, totalBeats:total, seq:items, guide:true, swing:ex.swing, clickOn:false, backing: secChords && (!C.back || C.back.checked) ? {chords:secChords, style:ex.style} : null, tracks:trk()}) : playSeq(items, +C.bpm.value, {swing:ex.swing, stacc:ex.artic==='staccato'}); if(ex.audio && (!C.minus || C.minus.checked) && listenH.t0Perf) MinusAudio.startAt(ex.audio, listenH.t0Perf, secStart, +C.bpm.value||ex.bpm); };
@@ -3004,6 +3023,7 @@ function viewPerform(v, p){
   v.innerHTML = `<div class="perform" id="pf">
     <div class="row pf-bar"><a href="#" id="pfBack">← Назад</a><b style="flex:1;font-family:var(--serif);font-size:20px">${esc(p.title)}</b>
       <label class="muted">Темп <input type="number" id="pfBpm" min="30" max="260" value="${p.bpm||80}" style="width:64px"></label>
+      <label class="muted">з такту <input type="number" id="pfFrom" min="1" max="${starts.length}" value="1" style="width:56px"></label>
       <label class="muted"><input type="checkbox" id="pfGuide"> мелодія</label>
       ${p.chords?`<label class="muted"><input type="checkbox" id="pfBack2" ${p.audio?'':'checked'}> фонограма</label>`:''}
       ${p.audio?`<label class="muted"><input type="checkbox" id="pfMinus" checked> мінусовка</label>`:''}
@@ -3028,13 +3048,19 @@ function viewPerform(v, p){
   const stopRun = () => { if(!run) return; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); $('pfGo').textContent = '▶ Грати'; document.querySelectorAll('.pf-row.on').forEach(x=>x.classList.remove('on')); curRow = -1; if(roll) roll.update(0); };
   $('pfGo').onclick = () => { if(run){ stopRun(); return; }
     const bpm = clamp(+$('pfBpm').value || p.bpm || 80, 30, 260);
-    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:FULL, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup:PICK0,
-      backing: $('pfBack2') && $('pfBack2').checked ? {chords:p.chords, style:p.style} : null, tracks: p.tracks && p.tracks.length ? {list:p.tracks, muted:ex.muted||p.tracks.map(()=>false)} : null});
-    if(p.audio && $('pfMinus') && $('pfMinus').checked) MinusAudio.startAt(p.audio, run.t0Perf, 0, bpm);
+    const fb = clamp(+$('pfFrom').value || 1, 1, starts.length); fromBeat = starts[fb-1];
+    const sl = fromBeat > 0 ? sliceSection(FULL, p, fromBeat, total) : {items:FULL, total, chords:p.chords, tracks:p.tracks};
+    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:sl.total, seq:sl.items, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup: fromBeat > 0 ? 0 : PICK0,
+      backing: $('pfBack2') && $('pfBack2').checked && sl.chords ? {chords:sl.chords, style:p.style} : null, tracks: sl.tracks && sl.tracks.length ? {list:sl.tracks, muted:ex.muted||sl.tracks.map(()=>false)} : null});
+    if(p.audio && $('pfMinus') && $('pfMinus').checked) MinusAudio.startAt(p.audio, run.t0Perf, fromBeat, bpm);
     if($('pfRec').checked && !recStart(p.title+' · виступ · '+bpm+' bpm')) toast('Для запису увімкни мікрофон угорі.');
     $('pfGo').textContent = '■ Стоп'; };
-  const stopLoop = loopFrames(t=>{ if(!run) return; const beat = (t - run.t0Perf)/run.spbMs;
-    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0 && roll) roll.update(beat); if(beat < 0){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil(-beat*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
+  let fromBeat = 0;
+  // клік по рядку нот: почати з першого такту цього рядка
+  $('pfRows').addEventListener('click', e=>{ if(run) return; const row = e.target.closest('.pf-row'); if(!row) return; const i = +row.id.replace('pfr','');
+    $('pfFrom').value = i*PER + 1; document.querySelectorAll('.pf-row.from').forEach(x=>x.classList.remove('from')); row.classList.add('from'); toast(`Почнеш з такту ${i*PER+1}.`); });
+  const stopLoop = loopFrames(t=>{ if(!run) return; const beat = fromBeat + (t - run.t0Perf)/run.spbMs;
+    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < fromBeat && roll) roll.update(beat); if(beat < fromBeat){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil((fromBeat-beat)*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
     if(roll){ roll.update(beat); return; }
     let r = rows.findIndex(x=>beat >= x.sB && beat < x.eB); if(r < 0) return;
     if(r !== curRow){ if(curRow>=0) $('pfr'+curRow).classList.remove('on'); $('pfr'+r).classList.add('on'); curRow = r;
@@ -3250,14 +3276,19 @@ function runWait(box, ex, ctx){
   const items = parseSeq(ex.seq), beats = ex.beats||4, total = items.reduce((a,b)=>a+b.d,0), pickup = ex.pickup ?? pickupOf(ex.chords, beats);
   const R = exShell(box, ex, `<label class="muted">Темп <input type="number" data-c="bpm" min="30" max="260" value="${LS.get('tempo.'+ex.key, null) || ex.bpm}"></label>
     ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.tracks&&ex.tracks.length?'':'checked'}> фонограма</label>`:''}
+    <label class="muted">з такту <input type="number" data-c="from" min="1" value="1" style="width:56px"></label>
     <button class="primary" data-c="go">Почати</button>`);
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
+  const BARS = barStartsOf(items.reduce((a,b)=>a+b.d,0), beats, ex.pickup ?? pickupOf(ex.chords, beats));
+  C.from.max = BARS.length; C.from.value = clamp(LS.get('from.'+ex.key, 1), 1, BARS.length); C.from.onchange = () => { C.from.value = clamp(+C.from.value||1, 1, BARS.length); LS.set('from.'+ex.key, +C.from.value); };
+  let startK = 0;
   const starts = []; { let c = 0; items.forEach(it=>{ starts.push(c); c += it.d; }); }
   const idx = items.map((it,i)=>i).filter(i=>items[i].n!=null);
   const marks = items.map(()=>({}));
   const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, marks, chordLabels: chordLabelsOf(ex.chords)});
   let layout = scoreView(R.staff, items, vopts()); viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); layout.update(cur>=0 ? starts[idx[cur]] : 0); });
   trackChips(box.querySelector('.focus'), ex, ()=> seg ? seg.mix : null);
+  setTimeout(()=>scoreClick(R.staff, ()=>layout, i=>{ if(active) return; let b = 0; for(let k=0;k<i;k++) b += items[k].d; let bar = 1; BARS.forEach((s,k)=>{ if(s <= b + 1e-6) bar = k+1; }); C.from.value = bar; LS.set('from.'+ex.key, bar); toast(`Почнеш з такту ${bar}.`); }), 0);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   let cur = -1, seg = null, segTimer = 0, active = false, misses = 0, firstTry = 0, waitFrom = 0; const waits = [];
   const bpm = () => clamp(+C.bpm.value || ex.bpm, 30, 260);
@@ -3274,8 +3305,10 @@ function runWait(box, ex, ctx){
   function waitNote(k){ cur = k; if(k >= idx.length){ finish(); return; } waitFrom = now(); misses = 0; show();
     setHint(R, `Чекаю ${withKeys(items[idx[k]].n)}.`); }
   C.go.onclick = () => { if(active){ stop(); return; } active = true; C.go.textContent = '■ Стоп'; Object.keys(marks).forEach(k=>marks[k] = {}); firstTry = 0; waits.length = 0; R.result.innerHTML = '';
-    const intro = idx.length ? starts[idx[0]] : 0;
-    if(intro > 0){ setHint(R, 'Вступ…'); playSeg(0, intro, ()=>waitNote(0)); } else waitNote(0); };
+    // старт із вибраного такту: перша нота, що починається в ньому або пізніше
+    const fromBeat = BARS[clamp(+C.from.value||1, 1, BARS.length) - 1]; startK = Math.max(0, idx.findIndex(i=>starts[i] >= fromBeat - 1e-6)); if(startK < 0) startK = 0;
+    const intro = idx.length ? starts[idx[startK]] - fromBeat : 0;
+    if(intro > 0.01){ setHint(R, 'Вступ…'); playSeg(fromBeat, starts[idx[startK]], ()=>waitNote(startK)); } else waitNote(startK); };
   function stop(){ active = false; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); C.go.textContent = 'Почати'; cur = -1; }
   let pending = -1; // наступна нота, поки ще грає відрізок попередньої
   const off = listen((type, d)=>{ if(!active || type!=='on') return;
@@ -3289,7 +3322,7 @@ function runWait(box, ex, ctx){
     setHint(R, 'Добре, далі…', 'ok'); show();
     playSeg(starts[i], segEnd(k), ()=>{ if(active) waitNote(k+1); }); });
   function finish(){ active = false; seg = null; C.go.textContent = 'Почати'; layout = scoreView(R.staff, items, vopts()); layout.update(total);
-    const n = idx.length, score = n ? firstTry/n*100 : 0, avgWait = mean(waits)/1000;
+    const n = idx.length - startK, score = n ? firstTry/n*100 : 0, avgWait = mean(waits)/1000;
     if(score >= 90){ const nb = bpm() + 4; LS.set('tempo.'+ex.key, nb); C.bpm.value = nb; }
     showResult(R, {score, pass: ex.pass||80, bpm: bpm(), advice: score >= 90 ? 'Майже без зупинок. Можна переходити до гри з метрономом.' : 'Повтори кілька разів, поки ноти не підуть з першої спроби, потім перейди до режиму з метрономом.',
       stats:[['з першої спроби', firstTry+'/'+n], ['середнє очікування', avgWait.toFixed(1)+' с'], ['темп', bpm()+' bpm']]}, ctx); }

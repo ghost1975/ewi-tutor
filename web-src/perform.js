@@ -9,6 +9,7 @@ function viewPerform(v, p){
   v.innerHTML = `<div class="perform" id="pf">
     <div class="row pf-bar"><a href="#" id="pfBack">← Назад</a><b style="flex:1;font-family:var(--serif);font-size:20px">${esc(p.title)}</b>
       <label class="muted">Темп <input type="number" id="pfBpm" min="30" max="260" value="${p.bpm||80}" style="width:64px"></label>
+      <label class="muted">з такту <input type="number" id="pfFrom" min="1" max="${starts.length}" value="1" style="width:56px"></label>
       <label class="muted"><input type="checkbox" id="pfGuide"> мелодія</label>
       ${p.chords?`<label class="muted"><input type="checkbox" id="pfBack2" ${p.audio?'':'checked'}> фонограма</label>`:''}
       ${p.audio?`<label class="muted"><input type="checkbox" id="pfMinus" checked> мінусовка</label>`:''}
@@ -33,13 +34,19 @@ function viewPerform(v, p){
   const stopRun = () => { if(!run) return; run.stop(); run = null; MinusAudio.stop(); if(Rec.mr) recStop(); $('pfGo').textContent = '▶ Грати'; document.querySelectorAll('.pf-row.on').forEach(x=>x.classList.remove('on')); curRow = -1; if(roll) roll.update(0); };
   $('pfGo').onclick = () => { if(run){ stopRun(); return; }
     const bpm = clamp(+$('pfBpm').value || p.bpm || 80, 30, 260);
-    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:total, seq:FULL, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup:PICK0,
-      backing: $('pfBack2') && $('pfBack2').checked ? {chords:p.chords, style:p.style} : null, tracks: p.tracks && p.tracks.length ? {list:p.tracks, muted:ex.muted||p.tracks.map(()=>false)} : null});
-    if(p.audio && $('pfMinus') && $('pfMinus').checked) MinusAudio.startAt(p.audio, run.t0Perf, 0, bpm);
+    const fb = clamp(+$('pfFrom').value || 1, 1, starts.length); fromBeat = starts[fb-1];
+    const sl = fromBeat > 0 ? sliceSection(FULL, p, fromBeat, total) : {items:FULL, total, chords:p.chords, tracks:p.tracks};
+    run = schedule({bpm, beats, countIn:countInBars(bpm, beats), totalBeats:sl.total, seq:sl.items, guide:true, guideOn:$('pfGuide').checked, clickOn:$('pfClick').checked, pickup: fromBeat > 0 ? 0 : PICK0,
+      backing: $('pfBack2') && $('pfBack2').checked && sl.chords ? {chords:sl.chords, style:p.style} : null, tracks: sl.tracks && sl.tracks.length ? {list:sl.tracks, muted:ex.muted||sl.tracks.map(()=>false)} : null});
+    if(p.audio && $('pfMinus') && $('pfMinus').checked) MinusAudio.startAt(p.audio, run.t0Perf, fromBeat, bpm);
     if($('pfRec').checked && !recStart(p.title+' · виступ · '+bpm+' bpm')) toast('Для запису увімкни мікрофон угорі.');
     $('pfGo').textContent = '■ Стоп'; };
-  const stopLoop = loopFrames(t=>{ if(!run) return; const beat = (t - run.t0Perf)/run.spbMs;
-    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < 0 && roll) roll.update(beat); if(beat < 0){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil(-beat*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
+  let fromBeat = 0;
+  // клік по рядку нот: почати з першого такту цього рядка
+  $('pfRows').addEventListener('click', e=>{ if(run) return; const row = e.target.closest('.pf-row'); if(!row) return; const i = +row.id.replace('pfr','');
+    $('pfFrom').value = i*PER + 1; document.querySelectorAll('.pf-row.from').forEach(x=>x.classList.remove('from')); row.classList.add('from'); toast(`Почнеш з такту ${i*PER+1}.`); });
+  const stopLoop = loopFrames(t=>{ if(!run) return; const beat = fromBeat + (t - run.t0Perf)/run.spbMs;
+    if(t > run.endPerf + 400){ stopRun(); return; } if(beat < fromBeat && roll) roll.update(beat); if(beat < fromBeat){ $('pfGo').textContent = '■ Вступ через ' + Math.ceil((fromBeat-beat)*run.spbMs/1000) + ' с'; return; } else if($('pfGo').textContent !== '■ Стоп') $('pfGo').textContent = '■ Стоп';
     if(roll){ roll.update(beat); return; }
     let r = rows.findIndex(x=>beat >= x.sB && beat < x.eB); if(r < 0) return;
     if(r !== curRow){ if(curRow>=0) $('pfr'+curRow).classList.remove('on'); $('pfr'+r).classList.add('on'); curRow = r;

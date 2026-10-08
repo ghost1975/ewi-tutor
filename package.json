@@ -1,7 +1,7 @@
 {
   "name": "ewi-tutor",
   "productName": "EWI Tutor",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Репетитор гри на Akai EWI Solo",
   "author": "Andrii Pylypenko",
   "main": "main.js",

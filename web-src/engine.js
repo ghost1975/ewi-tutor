@@ -144,8 +144,10 @@ function runNotes(box, ex, ctx){
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
+  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
+  let lastLay = null;
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
-    const r = scoreView(R.staff, items, {marks:mk}); const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
+    const r = scoreView(R.staff, items, {marks:mk}); lastLay = r; const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
     setFocus(R, playing ? (playIdx>=0 ? items[playIdx].n : null) : (pos<items.length?items[pos].n:null)); };
   const stopPlay = () => { if(!playing) return; playing.h.stop(); playing.timers.forEach(clearTimeout); playing = null; playIdx = -1; P.play.textContent = '▶ Програти'; render(); };
   P.play.onclick = () => { if(playing){ stopPlay(); return; }
@@ -245,6 +247,8 @@ function runRhythm(box, ex, ctx){
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
     layout = scoreView(R.staff, items, vopts()); }
   if(SEC) SEC.onChange = () => { if(!run) applySection(); };
+  // клік по ноті: почати з такту, в якому вона стоїть
+  if(SEC) scoreClick(R.staff, ()=>layout, i=>{ if(run) return; let b = secStart; for(let k=0;k<i;k++) b += items[k].d; SEC.setStart(SEC.barOf(b)); toast(`Почнеш з такту ${SEC.barOf(b)}.`); });
   setFocus(R, items.find(i=>i.n!=null).n);
   setHint(R, ex.artic==='legato' ? 'Legato: не перериваєш повітря між нотами, міняєш лише пальці.' : ex.artic==='staccato' ? 'Staccato: коротка нота і пауза, кожну зупиняй язиком.' : 'Після одного такту рахунку грай разом із метрономом.');
   C.listen.onclick = () => { if(listenH){ listenH.stop(); MinusAudio.stop(); } if(!run) applySection(); listenH = (secChords || trk() || ex.audio) ? schedule({bpm:+C.bpm.value||ex.bpm, beats, countIn:0, totalBeats:total, seq:items, guide:true, swing:ex.swing, clickOn:false, backing: secChords && (!C.back || C.back.checked) ? {chords:secChords, style:ex.style} : null, tracks:trk()}) : playSeq(items, +C.bpm.value, {swing:ex.swing, stacc:ex.artic==='staccato'}); if(ex.audio && (!C.minus || C.minus.checked) && listenH.t0Perf) MinusAudio.startAt(ex.audio, listenH.t0Perf, secStart, +C.bpm.value||ex.bpm); };

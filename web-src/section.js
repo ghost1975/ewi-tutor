@@ -19,16 +19,17 @@ function heatOf(key){ Progress.heat = Progress.heat || {}; return Progress.heat[
 function heatColor(v){ return v==null ? 'var(--line)' : v >= 0.85 ? 'var(--ok)' : v >= 0.6 ? 'var(--brass)' : 'var(--bad)'; }
 // Панель фрагмента для довгих мелодій: такти з–по, петля, крок темпу, карта тактів
 function sectionUI(box, ex, FULL, beats){
-  if(!ex.allowLoop || !ex.key) return null;
+  if(!ex.key) return null;
   const total = FULL.reduce((a,b)=>a+b.d,0), pickup = ex.pickup ?? pickupOf(ex.chords, beats), starts = barStartsOf(total, beats, pickup), N = starts.length;
-  if(N < 3) return null;
+  if(N < 2) return null;
   const st = Object.assign({a:1, b:N, loop:false, step:4}, LS.get('sec.'+ex.key, {})); st.a = clamp(st.a,1,N); st.b = clamp(st.b,st.a,N);
   const el = document.createElement('div'); el.className = 'section-ui';
-  el.innerHTML = `<div class="row"><span class="muted">Фрагмент: такти</span><input type="number" data-s="a" min="1" max="${N}" value="${st.a}" style="width:60px"><span class="muted">–</span><input type="number" data-s="b" min="1" max="${N}" value="${st.b}" style="width:60px"><span class="muted">з ${N}</span>
+  el.innerHTML = `<div class="row"><span class="muted">Почати з такту</span><input type="number" data-s="a" min="1" max="${N}" value="${st.a}" style="width:60px"><span class="muted">до такту</span><input type="number" data-s="b" min="1" max="${N}" value="${st.b}" style="width:60px"><span class="muted">з ${N}</span>
     <label class="muted"><input type="checkbox" data-s="loop" ${st.loop?'checked':''}> петля</label>
     <label class="muted">крок темпу +<input type="number" data-s="step" min="1" max="20" value="${st.step}" style="width:52px"> bpm</label>
     <button class="small" data-s="weak">Найслабші такти</button><button class="small" data-s="all">Уся мелодія</button></div>
-    <div class="heat" data-s="heat" title="Карта точності по тактах. Натисни такт, щоб вибрати його; із Shift — розширити фрагмент."></div>`;
+    <div class="heat" data-s="heat" title="Такти пісні, колір показує точність. Натисни такт, щоб почати з нього; із Shift — щоб закінчити на ньому."></div>
+    <p class="muted sec-hint">Натисни такт у смузі вище або ноту на нотному стані, щоб почати з цього місця.</p>`;
   box.querySelector('.ex-head').after(el);
   const S = {}; el.querySelectorAll('[data-s]').forEach(x=>S[x.dataset.s]=x);
   const api = { onChange:null };
@@ -37,7 +38,7 @@ function sectionUI(box, ex, FULL, beats){
     S.heat.innerHTML = starts.map((s,i)=>{ const v = h[i] ? h[i][0] : null, sel = i+1>=st.a && i+1<=st.b;
       return `<button class="cell${sel?' sel':''}" data-bar="${i+1}" style="background:${heatColor(v)}" title="Такт ${i+1}${v!=null?`: ${Math.round(v*100)}%`:''}">${(i+1)%4===1?i+1:''}</button>`; }).join('');
     S.heat.querySelectorAll('[data-bar]').forEach(c=>c.onclick = e=>{ const b = +c.dataset.bar;
-      if(e.shiftKey){ S.a.value = Math.min(st.a, b); S.b.value = Math.max(st.b, b); } else { S.a.value = b; S.b.value = b; } save(); }); }
+      if(e.shiftKey){ S.b.value = Math.max(st.a, b); } else { S.a.value = b; if(b > st.b) S.b.value = N; } save(); }); }
   ['a','b','loop','step'].forEach(k=>S[k].onchange = save);
   S.all.onclick = () => { S.a.value = 1; S.b.value = N; S.loop.checked = false; save(); };
   S.weak.onclick = () => { const h = heatOf(ex.key); let best = -1, bv = 2;
@@ -47,6 +48,8 @@ function sectionUI(box, ex, FULL, beats){
   drawHeat();
   api.range = () => (st.a===1 && st.b===N) ? null : [starts[st.a-1], st.b < N ? starts[st.b] : total];
   api.loop = () => st.loop; api.step = () => st.step;
+  api.barOf = beat => { let k = 0; while(k+1 < N && starts[k+1] <= beat + 1e-6) k++; return k + 1; };
+  api.setStart = bar => { S.a.value = clamp(bar, 1, N); if(+S.a.value > st.b) S.b.value = N; save(); };
   api.record = (items, marks, secStart) => { const h = heatOf(ex.key); let cum = secStart;
     const acc = {}; items.forEach((it,i)=>{ const at = cum; cum += it.d; if(it.n==null) return;
       let bar = 0; while(bar+1 < N && starts[bar+1] <= at + 1e-6) bar++;
@@ -80,3 +83,11 @@ const MediaStore = {
     const db = await this.db(); const blob = await new Promise(res=>{ const r = db.transaction('f').objectStore('f').get(name); r.onsuccess = ()=>res(r.result); r.onerror = ()=>res(null); });
     return blob ? URL.createObjectURL(blob) : null; }
 };
+
+// клік по нотному стану: індекс найближчої ноти (лише для вигляду «нотний стан»)
+function scoreClick(host, getLayout, fn){
+  host.addEventListener('click', e=>{ const lay = getLayout(); const svg = host.querySelector('svg'); if(!svg || !lay || !lay.xs) return;
+    const r = svg.getBoundingClientRect(), vb = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width ? svg.viewBox.baseVal.width : (+svg.getAttribute('width') || r.width);
+    const x = (e.clientX - r.left) * vb / r.width; let best = -1, bd = 1e9; lay.xs.forEach((xx,i)=>{ const d = Math.abs(xx - x); if(d < bd){ bd = d; best = i; } });
+    if(best >= 0 && bd < 40) fn(best); });
+}

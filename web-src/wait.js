@@ -4,14 +4,19 @@ function runWait(box, ex, ctx){
   const items = parseSeq(ex.seq), beats = ex.beats||4, total = items.reduce((a,b)=>a+b.d,0), pickup = ex.pickup ?? pickupOf(ex.chords, beats);
   const R = exShell(box, ex, `<label class="muted">Темп <input type="number" data-c="bpm" min="30" max="260" value="${LS.get('tempo.'+ex.key, null) || ex.bpm}"></label>
     ${ex.chords?`<label class="muted"><input type="checkbox" data-c="back" ${ex.tracks&&ex.tracks.length?'':'checked'}> фонограма</label>`:''}
+    <label class="muted">з такту <input type="number" data-c="from" min="1" value="1" style="width:56px"></label>
     <button class="primary" data-c="go">Почати</button>`);
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
+  const BARS = barStartsOf(items.reduce((a,b)=>a+b.d,0), beats, ex.pickup ?? pickupOf(ex.chords, beats));
+  C.from.max = BARS.length; C.from.value = clamp(LS.get('from.'+ex.key, 1), 1, BARS.length); C.from.onchange = () => { C.from.value = clamp(+C.from.value||1, 1, BARS.length); LS.set('from.'+ex.key, +C.from.value); };
+  let startK = 0;
   const starts = []; { let c = 0; items.forEach(it=>{ starts.push(c); c += it.d; }); }
   const idx = items.map((it,i)=>i).filter(i=>items[i].n!=null);
   const marks = items.map(()=>({}));
   const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, marks, chordLabels: chordLabelsOf(ex.chords)});
   let layout = scoreView(R.staff, items, vopts()); viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); layout.update(cur>=0 ? starts[idx[cur]] : 0); });
   trackChips(box.querySelector('.focus'), ex, ()=> seg ? seg.mix : null);
+  setTimeout(()=>scoreClick(R.staff, ()=>layout, i=>{ if(active) return; let b = 0; for(let k=0;k<i;k++) b += items[k].d; let bar = 1; BARS.forEach((s,k)=>{ if(s <= b + 1e-6) bar = k+1; }); C.from.value = bar; LS.set('from.'+ex.key, bar); toast(`Почнеш з такту ${bar}.`); }), 0);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   let cur = -1, seg = null, segTimer = 0, active = false, misses = 0, firstTry = 0, waitFrom = 0; const waits = [];
   const bpm = () => clamp(+C.bpm.value || ex.bpm, 30, 260);
@@ -28,8 +33,10 @@ function runWait(box, ex, ctx){
   function waitNote(k){ cur = k; if(k >= idx.length){ finish(); return; } waitFrom = now(); misses = 0; show();
     setHint(R, `Чекаю ${withKeys(items[idx[k]].n)}.`); }
   C.go.onclick = () => { if(active){ stop(); return; } active = true; C.go.textContent = '■ Стоп'; Object.keys(marks).forEach(k=>marks[k] = {}); firstTry = 0; waits.length = 0; R.result.innerHTML = '';
-    const intro = idx.length ? starts[idx[0]] : 0;
-    if(intro > 0){ setHint(R, 'Вступ…'); playSeg(0, intro, ()=>waitNote(0)); } else waitNote(0); };
+    // старт із вибраного такту: перша нота, що починається в ньому або пізніше
+    const fromBeat = BARS[clamp(+C.from.value||1, 1, BARS.length) - 1]; startK = Math.max(0, idx.findIndex(i=>starts[i] >= fromBeat - 1e-6)); if(startK < 0) startK = 0;
+    const intro = idx.length ? starts[idx[startK]] - fromBeat : 0;
+    if(intro > 0.01){ setHint(R, 'Вступ…'); playSeg(fromBeat, starts[idx[startK]], ()=>waitNote(startK)); } else waitNote(startK); };
   function stop(){ active = false; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); C.go.textContent = 'Почати'; cur = -1; }
   let pending = -1; // наступна нота, поки ще грає відрізок попередньої
   const off = listen((type, d)=>{ if(!active || type!=='on') return;
@@ -43,7 +50,7 @@ function runWait(box, ex, ctx){
     setHint(R, 'Добре, далі…', 'ok'); show();
     playSeg(starts[i], segEnd(k), ()=>{ if(active) waitNote(k+1); }); });
   function finish(){ active = false; seg = null; C.go.textContent = 'Почати'; layout = scoreView(R.staff, items, vopts()); layout.update(total);
-    const n = idx.length, score = n ? firstTry/n*100 : 0, avgWait = mean(waits)/1000;
+    const n = idx.length - startK, score = n ? firstTry/n*100 : 0, avgWait = mean(waits)/1000;
     if(score >= 90){ const nb = bpm() + 4; LS.set('tempo.'+ex.key, nb); C.bpm.value = nb; }
     showResult(R, {score, pass: ex.pass||80, bpm: bpm(), advice: score >= 90 ? 'Майже без зупинок. Можна переходити до гри з метрономом.' : 'Повтори кілька разів, поки ноти не підуть з першої спроби, потім перейди до режиму з метрономом.',
       stats:[['з першої спроби', firstTry+'/'+n], ['середнє очікування', avgWait.toFixed(1)+' с'], ['темп', bpm()+' bpm']]}, ctx); }
