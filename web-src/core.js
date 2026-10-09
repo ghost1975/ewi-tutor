@@ -342,3 +342,11 @@ function countdownText(beat, spbMs, beats){ const left = Math.ceil(-beat*spbMs/1
 var TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
 function totalMin(){ return Object.values(Progress.days||{}).reduce((a,b)=>a+b,0); }
 function songsPassed(){ return Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length; }
+
+// ---------- Місце, на якому зупинився у вправі ----------
+// зберігається між переходами між розділами і перезапусками застосунку
+const Resume = { all(){ return LS.get('resume', {}); },
+  key: ex => ex.key || ('t.' + (ex.title || '')),
+  get(k){ return this.all()[k] || null; },
+  set(k, v){ const a = this.all(); if(v == null) delete a[k]; else a[k] = Object.assign({at:Date.now()}, v); LS.set('resume', a); },
+  clear(k){ this.set(k, null); } };

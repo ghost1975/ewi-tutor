@@ -144,7 +144,7 @@ function runNotes(box, ex, ctx){
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
-  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
+  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); saveRes(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
   let lastLay = null;
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
     const r = scoreView(R.staff, items, {marks:mk}); lastLay = r; const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
@@ -160,14 +160,17 @@ function runNotes(box, ex, ctx){
     playing.timers.push(setTimeout(stopPlay, h.endPerf - now() + 150));
     const cdTick = () => { if(!playing || playing.h!==h) return; const b = (now() - h.t0Perf)/h.spbMs; if(b < 0){ const cd = countdownText(b, h.spbMs, ex.beats||4); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + withKeys(items[0].n)); requestAnimationFrame(cdTick); } else setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); }; cdTick();
     setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); render(); };
-  setHint(R, 'Грай ноти по черзі у своєму темпі. Наступна з\'явиться після правильної.');
+  const RK = Resume.key(ex), rs = Resume.get(RK);
+  if(rs && rs.pos > 0 && rs.pos < items.length && rs.n === items.length){ pos = rs.pos; firstTry = rs.firstTry||0; misses = rs.misses||0; (rs.marks||[]).forEach((c,i)=>{ if(c && i < pos) marks[i].cls = c; }); }
+  const saveRes = () => { if(pos > 0 && pos < items.length) Resume.set(RK, {pos, n:items.length, firstTry, misses, marks:marks.slice(0,pos).map(m=>m.cls||'')}); };
+  setHint(R, pos ? `Продовжуєш з ноти ${pos+1} з ${items.length}, де зупинився минулого разу.` : 'Грай ноти по черзі у своєму темпі. Наступна з\'явиться після правильної.');
   render();
   const off = listen((type,d)=>{
     if(type!=='on' || pos>=items.length || playing) return; events.push({t:d.t});
     const m = matchNote(d.n, items[pos].n); events[events.length-1].ok = m.ok;
     if(!t0) t0 = d.t;
-    if(m.ok){ if(!marks[pos].miss){ firstTry++; marks[pos].cls='ok'; } else marks[pos].cls='warn'; if(lastOk) gaps.push(d.t-lastOk); lastOk=d.t; pos++; setHint(R,''); render();
-      if(pos>=items.length) finish(); }
+    if(m.ok){ if(!marks[pos].miss){ firstTry++; marks[pos].cls='ok'; } else marks[pos].cls='warn'; if(lastOk) gaps.push(d.t-lastOk); lastOk=d.t; pos++; setHint(R,''); render(); saveRes();
+      if(pos>=items.length){ Resume.clear(RK); finish(); } }
     else { marks[pos].miss = (marks[pos].miss||0)+1; marks[pos].top='×'+marks[pos].miss; misses++; noteWrong(items[pos].n); setHint(R, missTip(d.n, items[pos].n), 'bad'); render(); }
   });
   const stopLoop = loopFrames(t=>{ R.cvval.textContent = Live.breath; drawTrace(R.cv, {hist:br.hist, events}); });
@@ -187,7 +190,9 @@ function runLong(box, ex, ctx){
   R.barw.hidden = false;
   const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); scoreView(R.staff, items, {marks}).focusIndex(pos); setFocus(R, pos<items.length?items[pos].n:null); };
   viewToggle(R.staff, ()=>render());
-  setHint(R, `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
+  const RK = Resume.key(ex), rs = Resume.get(RK);
+  if(rs && rs.pos > 0 && rs.pos < items.length && rs.n === items.length){ pos = rs.pos; (rs.stats||[]).forEach(s=>stats.push(s)); for(let i=0;i<pos;i++) marks[i].cls = 'ok'; }
+  setHint(R, pos ? `Продовжуєш з ноти ${pos+1} з ${items.length}.` : `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
   const off = listen((type,d)=>{
     if(pos>=items.length) return;
     if(type==='on'){ const m = matchNote(d.n, items[pos].n); events.push({t:d.t, ok:m.ok});
@@ -207,7 +212,7 @@ function runLong(box, ex, ctx){
       const bc = Settings.biteCC != null && typeof CCMON !== 'undefined' ? CCMON[Settings.biteCC] : null, bh = bc ? bc.hist.filter(h=>h[0] > holdStart + 350).map(h=>h[1]) : [];
       const biteSwing = bh.length > 3 ? Math.max(...bh) - Math.min(...bh) : 0;
       setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}${biteSwing > 25 ? ' Прикус коливався: розслаб губи, не стискай мундштук.' : ''}`, stab>=80 && biteSwing <= 25 ?'ok':'warn');
-      holdStart = 0; pos++; render(); if(pos>=items.length) finish();
+      holdStart = 0; pos++; render(); if(pos>=items.length){ Resume.clear(RK); finish(); } else Resume.set(RK, {pos, n:items.length, stats:stats.slice()});
     }
   });
   function finish(){ const score = mean(stats);
@@ -246,7 +251,8 @@ function runRhythm(box, ex, ctx){
     if(!s){ items = FULL; total = FULL_TOTAL; secStart = 0; secChords = ex.chords; secTracks = ex.tracks; pickup = PICK0; }
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
     layout = scoreView(R.staff, items, vopts()); }
-  if(SEC) SEC.onChange = () => { if(!run) applySection(); };
+  const RK = Resume.key(ex);
+  if(SEC) SEC.onChange = () => { if(!run){ if(pausedRange){ pausedRange = null; hadPause = false; Resume.clear(RK); C.go.textContent = 'Почати'; } applySection(); } };
   // клік по ноті: почати з такту, в якому вона стоїть
   if(SEC) scoreClick(R.staff, ()=>layout, i=>{ if(run) return; let b = secStart; for(let k=0;k<i;k++) b += items[k].d; SEC.setStart(SEC.barOf(b)); toast(`Почнеш з такту ${SEC.barOf(b)}.`); });
   setFocus(R, items.find(i=>i.n!=null).n);
@@ -255,11 +261,13 @@ function runRhythm(box, ex, ctx){
   C.go.onclick = () => start();
   // пауза: зупиняємо на поточному такті, продовжуємо з його початку після відліку
   const BARS = barStartsOf(FULL_TOTAL, beats, PICK0);
+  setTimeout(()=>{ const rs = Resume.get(RK); if(rs && rs.range && rs.range[1] <= FULL_TOTAL + 1e-6 && rs.range[0] < rs.range[1]){ pausedRange = rs.range; hadPause = true;
+    const bar = BARS.indexOf(rs.range[0]) + 1; C.go.textContent = `▶ Продовжити з такту ${bar}`; setHint(R, `Минулого разу ти зупинився на такті ${bar}. Натисни «Продовжити» або вибери інший такт.`); } }, 0);
   function pause(){ if(!run) return false; const beat = Math.max(0, (now() - run.t0Perf)/run.spbMs), abs = secStart + Math.min(beat, total), end = secStart + total;
     let b0 = BARS[0]; for(const b of BARS) if(b <= abs + 1e-6) b0 = b; if(b0 < secStart) b0 = secStart;
     looping = false; run.stop(); run = null; MinusAudio.stop(); hadPause = true; pausedRange = b0 < end - 1e-6 ? [b0, end] : null;
-    const bar = BARS.indexOf(b0) + 1; C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
-  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; start(); return true; }
+    const bar = BARS.indexOf(b0) + 1; if(pausedRange) Resume.set(RK, {range:pausedRange}); C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
+  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; Resume.clear(RK); start(); return true; }
   function start(){
     if(run){ pause(); return; }
     if(pausedRange){ resume(); return; }
@@ -324,11 +332,11 @@ function runRhythm(box, ex, ctx){
     const pass = ex.pass||75;
     if(score >= pass && (C.auto.checked || looping)){ const nb = Math.min(bpm+(SEC?SEC.step():4), ex.maxBpm||Math.round(ex.bpm*1.6)); C.bpm.value = nb; LS.set('tempo.'+ex.key, nb); advice.push(`Авто-темп: наступна спроба на ${nb} bpm.`); }
     LS.set('auto.'+ex.key, C.auto.checked);
-    const paused = hadPause; hadPause = false; if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
+    const paused = hadPause; hadPause = false; Resume.clear(RK); if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
     showResult(R, {score, pass, bpm, advice: advice.join(' ') || 'Чисто і рівно в темпі.',
       stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, paused ? Object.assign({}, ctx, {done:()=>{}}) : ctx);
   }
-  const cleanup = ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  const cleanup = ()=>{ looping = false; if(run) pause(); off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
   cleanup.pause = pause; cleanup.resume = resume; return cleanup;
 }
 

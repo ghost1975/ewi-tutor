@@ -33,7 +33,7 @@
         <div class="pb-inner"></div>`;
       bar = box.querySelector('.practice-bar'); inner = box.querySelector('.pb-inner');
       bar.querySelectorAll('[data-m]').forEach(b=>b.onclick = () => setMode(b.dataset.m));
-      bar.querySelector('[data-a=restart]').onclick = () => mount();
+      bar.querySelector('[data-a=restart]').onclick = () => { Resume.clear(Resume.key(ex)); Resume.clear((ex.key||'x') + '.wait'); mount(); };
       const pb = bar.querySelector('[data-a=pause]'), stateEl = bar.querySelector('.pb-state');
       pb.onclick = () => paused ? doResume() : doPause();
       if(canWait && mode === 'wait'){

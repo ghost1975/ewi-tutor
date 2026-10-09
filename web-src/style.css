@@ -164,3 +164,8 @@ canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface
 .pf-row{cursor:pointer}
 .pf-row.from{box-shadow:inset 3px 0 0 var(--ok)}
 .sec-hint{margin:0;font-size:12px}
+
+.lesson-head{align-items:flex-start;justify-content:space-between;gap:12px}
+.lesson-actions{gap:10px;margin-top:6px}
+.done-toggle{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:var(--surface);cursor:pointer}
+.done-toggle:has(input:checked){border-color:var(--ok);color:var(--ok)}

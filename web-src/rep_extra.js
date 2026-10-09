@@ -9,7 +9,7 @@ async function repPlay(v, s){
   const audio = s.audio ? {...s.audio, url: await MediaStore.url(await MediaStore.pick(s.audio))} : null;
   let stop = null;
   const onMute = arr => { s.muted = arr; saveRepItem({id:s.id, muted:arr}); };
-  const mode = k => { if(stop) stop(); stop = null; [1,2,3,5,6].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
+  const mode = k => { if(stop) stop(); stop = null; LS.set('tab.rep.'+s.id, k); [1,2,3,5,6].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
     if(k===5){ stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Супровід чекає на кожну правильну ноту. Так п\'єсу вчать без поспіху, але разом з гуртом.', seq:s.seq, bpm:s.bpm, beats:s.beats, key:'wait.'+s.id, chords:s.chords||null, style:s.style||'pop', tracks:s.tracks, muted:s.muted, onMute, pass:80}, {done(){}, again:()=>mode(5), next:()=>mode(2)}); return; }
     if(k===6){ if(!s.chords){ $('box').innerHTML = '<div class="theory"><p>Для імпровізації потрібні акорди. Імпортуй мелодію з доріжками супроводу або впиши акорди вручну.</p></div>'; return; }
       stop = RUNNERS.improv($('box'), {type:'improv', title:'Імпровізація на гармонію пісні', how:`Акорди пісні${s.chordsAuto?' визначено автоматично з доріжок':''}. Над станом видно поточний акорд, звуки акорду на сильних долях дають найкращий результат.`, bpm:s.bpm, loops:1, beats:s.beats||4, scaleSeq:scaleFromChords(s.chords), chords:chordsForImprov(s.chords), pass:65}, {done(){}, again:()=>mode(6), next:()=>mode(6)}); return; }
@@ -20,7 +20,7 @@ async function repPlay(v, s){
       again:()=>mode(k), next:()=>mode(2) }); };
   $('m1').onclick = ()=>mode(1); $('m2').onclick = ()=>mode(2); $('m3').onclick = ()=>mode(3); $('m5').onclick = ()=>mode(5); $('m6').onclick = ()=>mode(6);
   $('m4').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, chords:s.chords, style:s.style, tracks:s.tracks, muted:s.muted, audio, back:['rep', s.id]});
-  mode(1);
+  mode([1,2,3,5,6].includes(LS.get('tab.rep.'+s.id, 1)) ? LS.get('tab.rep.'+s.id, 1) : 1);
   UI.cleanup = ()=>{ if(stop) stop(); MinusAudio.stop(); };
 }
 function minusTab(box, s, audio, reload){

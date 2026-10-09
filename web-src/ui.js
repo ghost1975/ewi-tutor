@@ -41,7 +41,9 @@ function go(view, arg){
 
 // ---------- Прогрес уроків ----------
 const lp = id => Progress.lessons[id] || (Progress.lessons[id] = {best:{}});
-function lessonDone(l){ const p = lp(l.id); return l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); }
+function lessonDone(l){ const p = lp(l.id); return !!p.manual || l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); }
+const lessonEarned = l => { const p = lp(l.id); return l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); };
+const lessonAfter = l => LESSONS[LESSONS.indexOf(l)+1] || null;
 function nextLesson(){ return LESSONS.find(l=>!lessonDone(l)); }
 function recordResult(l, i, res){
   const p = lp(l.id); p.best[i] = Math.max(p.best[i]||0, Math.round(res.score)); p.last = Date.now();
@@ -74,7 +76,7 @@ function viewProgram(v){
       const bests = l.ex.map((e,i)=>lp(l.id).best[i]||0), started = bests.some(x=>x>0);
       const isHere = here===l, passed = l.ex.filter((e,i)=>(bests[i]||0)>=passOf(e)).length;
       b.className = 'lesson-btn'+(d?' done':'')+(isNext?' next':'')+(isHere?' here':'');
-      b.innerHTML = `<span class="num">${d?'✓':l.id.split('.')[1]}</span><div><b>${esc(l.title)}</b><span>${isHere?`Ти зупинився тут${d?' · пройдено':` · ${passed} з ${l.ex.length} вправ`}`:d?'Пройдено':isNext?'Наступний урок':started?`Розпочато · ${passed} з ${l.ex.length} вправ`:esc(l.goal)}</span>${isHere||started&&!d?`<i class="mini"><i style="width:${passed/l.ex.length*100}%"></i></i>`:''}</div>`;
+      b.innerHTML = `<span class="num">${d?'✓':l.id.split('.')[1]}</span><div><b>${esc(l.title)}</b><span>${isHere?`Ти зупинився тут${d?' · пройдено':` · ${passed} з ${l.ex.length} вправ`}`:d?(lessonEarned(l)?'Пройдено':'Позначено пройденим'):isNext?'Наступний урок':started?`Розпочато · ${passed} з ${l.ex.length} вправ`:esc(l.goal)}</span>${isHere||started&&!d?`<i class="mini"><i style="width:${passed/l.ex.length*100}%"></i></i>`:''}</div>`;
       b.onclick = ()=>go('lesson', isHere && last===l && !d ? {lesson:l, step:Progress.last.step} : l); sec.querySelector('.lessons').appendChild(b); });
     $('levels').appendChild(sec);
   });
@@ -86,10 +88,17 @@ function viewLesson(v, l, startStep){
   UI.lesson = l; UI.step = 0;
   const steps = [{k:'theory', t:'Теорія'}, ...l.ex.map((e,i)=>({k:'ex', i, t:(i+1)+'. '+e.title})), {k:'sum', t:'Підсумок'}];
   v.innerHTML = `<div class="muted">Рівень ${l.lvl}. ${esc(LEVELS[l.lvl-1].title)} · урок ${l.id}</div>
-    <h2 class="title">${esc(l.title)}</h2><p class="sub">${esc(l.goal)}</p>
+    <div class="row lesson-head"><div style="flex:1;min-width:260px"><h2 class="title">${esc(l.title)}</h2><p class="sub">${esc(l.goal)}</p></div>
+      <div class="row lesson-actions"><label class="muted done-toggle"><input type="checkbox" id="lDone"> урок пройдено</label>${lessonAfter(l)?`<button class="primary" id="lNext">Наступний урок →</button>`:''}</div></div>
     <div class="steps" id="steps"></div>
     <div class="grid2"><div id="stepBox"></div><aside id="side"></aside></div>`;
   Side.mount($('side'));
+  // ручна позначка «пройдено» і перехід до наступного уроку
+  const syncDone = () => { const p = lp(l.id), earned = lessonEarned(l); $('lDone').checked = lessonDone(l); $('lDone').disabled = earned;
+    $('lDone').parentElement.title = earned ? 'Урок пройдено за результатами вправ' : 'Познач, якщо вже вмієш це і хочеш рухатися далі'; };
+  syncDone();
+  $('lDone').onchange = () => { const p = lp(l.id); if($('lDone').checked){ p.manual = Date.now(); toast(`Урок ${l.id} позначено як пройдений.`, lessonAfter(l) ? [['Наступний урок →', ()=>go('lesson', lessonAfter(l))]] : null); } else delete p.manual; saveProgress(); syncDone(); };
+  if($('lNext')) $('lNext').onclick = () => go('lesson', lessonAfter(l));
   const renderSteps = () => { const p = lp(l.id); $('steps').innerHTML = '';
     steps.forEach((s,k)=>{ const b = document.createElement('button'); b.textContent = s.t; b.setAttribute('aria-current', k===UI.step);
       if(s.k==='ex' && (p.best[s.i]||0) >= passOf(l.ex[s.i])) b.classList.add('passed');
@@ -118,7 +127,11 @@ function viewLesson(v, l, startStep){
         again:()=>show(k), next:()=>show(k+1) });
     } else {
       const p = lp(l.id), d = lessonDone(l), idx = LESSONS.indexOf(l), nx = LESSONS[idx+1];
-      box.innerHTML = `<div class="result ${d?'pass':''}"><div class="score">${d?'Урок пройдено':'Ще не всі вправи пройдено'}</div></div>
+      setTimeout(()=>{ const m = $('sumMark'), n = $('sumNext'); if(m) m.onclick = ()=>{ $('lDone').checked = true; $('lDone').onchange(); show(k); }; if(n) n.onclick = ()=>go('lesson', nx); }, 0);
+      const manualOnly = d && !lessonEarned(l);
+      box.innerHTML = `<div class="result ${d?'pass':''}"><div class="score">${d ? (manualOnly ? 'Урок позначено пройденим' : 'Урок пройдено') : 'Ще не всі вправи пройдено'}</div>
+          ${manualOnly ? '<p class="muted">Позначка ручна. Вправи можна пройти будь-коли, результати збережуться.</p>' : ''}
+          <div class="row" style="margin-top:10px">${!d ? '<button id="sumMark">Позначити урок пройденим</button>' : ''}${nx ? `<button class="primary" id="sumNext">Наступний урок: ${esc(nx.id+' '+nx.title)} →</button>` : '<span class="muted">Це останній урок програми.</span>'}</div></div>
         <table style="margin-top:14px"><tr><th>Вправа</th><th>Найкращий результат</th><th>Прохідний</th></tr>
         ${l.ex.map((e,i)=>`<tr><td>${esc(e.title)}</td><td>${p.best[i]!=null?p.best[i]:'—'}</td><td>${passOf(e)}</td></tr>`).join('')}</table>
         <h3>Типові помилки</h3><ul class="theory">${l.mistakes.map(m=>`<li>${noteText(esc(m))}</li>`).join('')}</ul>

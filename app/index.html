@@ -173,6 +173,11 @@ canvas.roll{width:100%;display:block;border-radius:10px;background:var(--surface
 .pf-row.from{box-shadow:inset 3px 0 0 var(--ok)}
 .sec-hint{margin:0;font-size:12px}
 
+.lesson-head{align-items:flex-start;justify-content:space-between;gap:12px}
+.lesson-actions{gap:10px;margin-top:6px}
+.done-toggle{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:var(--surface);cursor:pointer}
+.done-toggle:has(input:checked){border-color:var(--ok);color:var(--ok)}
+
 </style>
 </head>
 <body>
@@ -521,6 +526,14 @@ function countdownText(beat, spbMs, beats){ const left = Math.ceil(-beat*spbMs/1
 var TeacherLog = { get(){ return LS.get('teacher', []); }, add(q, a){ const l = this.get(); l.unshift({at:Date.now(), q, a}); LS.set('teacher', l.slice(0,40)); } };
 function totalMin(){ return Object.values(Progress.days||{}).reduce((a,b)=>a+b,0); }
 function songsPassed(){ return Object.values(Progress.songs||{}).filter(x=>x.play && x.play.score >= 75).length; }
+
+// ---------- Місце, на якому зупинився у вправі ----------
+// зберігається між переходами між розділами і перезапусками застосунку
+const Resume = { all(){ return LS.get('resume', {}); },
+  key: ex => ex.key || ('t.' + (ex.title || '')),
+  get(k){ return this.all()[k] || null; },
+  set(k, v){ const a = this.all(); if(v == null) delete a[k]; else a[k] = Object.assign({at:Date.now()}, v); LS.set('resume', a); },
+  clear(k){ this.set(k, null); } };
 
 // ---------- Реалістичні інструменти: семпли Fluid R3 GM (CC BY 3.0) через midi-js-soundfonts ----------
 // Настільна версія бере файли з папки soundfonts поруч зі сторінкою, браузерна — з CDN.
@@ -1036,7 +1049,7 @@ function runNotes(box, ex, ctx){
   prepareSound({seq:pItems, chords:ex.playChords, tracks:ex.tracks});
   let pos = 0, firstTry = 0, misses = 0, t0 = 0, lastOk = 0, playing = null, playIdx = -1; const marks = items.map(()=>({})), events = [], gaps = [];
   const br = breathRecorder();
-  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
+  setTimeout(()=>scoreClick(R.staff, ()=>lastLay, i=>{ if(playing) return; pos = i; marks.forEach(m=>{ if(m.cls==='cur') delete m.cls; }); render(); saveRes(); setHint(R, 'Починаєш з цієї ноти.'); }), 0);
   let lastLay = null;
   const render = () => { const mk = marks.map((m,i)=>({...m, cls: playing ? (i===playIdx ? 'cur' : (m.cls==='cur'?undefined:m.cls)) : (i===pos ? 'cur' : m.cls)}));
     const r = scoreView(R.staff, items, {marks:mk}); lastLay = r; const at = playing ? Math.max(0, playIdx) : Math.min(pos, items.length-1); r.focusIndex(at);
@@ -1052,14 +1065,17 @@ function runNotes(box, ex, ctx){
     playing.timers.push(setTimeout(stopPlay, h.endPerf - now() + 150));
     const cdTick = () => { if(!playing || playing.h!==h) return; const b = (now() - h.t0Perf)/h.spbMs; if(b < 0){ const cd = countdownText(b, h.spbMs, ex.beats||4); R.big.textContent = cd.secs; setHint(R, cd.text + ' · перша нота ' + withKeys(items[0].n)); requestAnimationFrame(cdTick); } else setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); }; cdTick();
     setHint(R, 'Слухай і дивись на клавіші. Після прослуховування грай сам.'); render(); };
-  setHint(R, 'Грай ноти по черзі у своєму темпі. Наступна з\'явиться після правильної.');
+  const RK = Resume.key(ex), rs = Resume.get(RK);
+  if(rs && rs.pos > 0 && rs.pos < items.length && rs.n === items.length){ pos = rs.pos; firstTry = rs.firstTry||0; misses = rs.misses||0; (rs.marks||[]).forEach((c,i)=>{ if(c && i < pos) marks[i].cls = c; }); }
+  const saveRes = () => { if(pos > 0 && pos < items.length) Resume.set(RK, {pos, n:items.length, firstTry, misses, marks:marks.slice(0,pos).map(m=>m.cls||'')}); };
+  setHint(R, pos ? `Продовжуєш з ноти ${pos+1} з ${items.length}, де зупинився минулого разу.` : 'Грай ноти по черзі у своєму темпі. Наступна з\'явиться після правильної.');
   render();
   const off = listen((type,d)=>{
     if(type!=='on' || pos>=items.length || playing) return; events.push({t:d.t});
     const m = matchNote(d.n, items[pos].n); events[events.length-1].ok = m.ok;
     if(!t0) t0 = d.t;
-    if(m.ok){ if(!marks[pos].miss){ firstTry++; marks[pos].cls='ok'; } else marks[pos].cls='warn'; if(lastOk) gaps.push(d.t-lastOk); lastOk=d.t; pos++; setHint(R,''); render();
-      if(pos>=items.length) finish(); }
+    if(m.ok){ if(!marks[pos].miss){ firstTry++; marks[pos].cls='ok'; } else marks[pos].cls='warn'; if(lastOk) gaps.push(d.t-lastOk); lastOk=d.t; pos++; setHint(R,''); render(); saveRes();
+      if(pos>=items.length){ Resume.clear(RK); finish(); } }
     else { marks[pos].miss = (marks[pos].miss||0)+1; marks[pos].top='×'+marks[pos].miss; misses++; noteWrong(items[pos].n); setHint(R, missTip(d.n, items[pos].n), 'bad'); render(); }
   });
   const stopLoop = loopFrames(t=>{ R.cvval.textContent = Live.breath; drawTrace(R.cv, {hist:br.hist, events}); });
@@ -1079,7 +1095,9 @@ function runLong(box, ex, ctx){
   R.barw.hidden = false;
   const render = () => { marks.forEach((m,i)=>{ if(i===pos) m.cls='cur'; }); scoreView(R.staff, items, {marks}).focusIndex(pos); setFocus(R, pos<items.length?items[pos].n:null); };
   viewToggle(R.staff, ()=>render());
-  setHint(R, `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
+  const RK = Resume.key(ex), rs = Resume.get(RK);
+  if(rs && rs.pos > 0 && rs.pos < items.length && rs.n === items.length){ pos = rs.pos; (rs.stats||[]).forEach(s=>stats.push(s)); for(let i=0;i<pos;i++) marks[i].cls = 'ok'; }
+  setHint(R, pos ? `Продовжуєш з ноти ${pos+1} з ${items.length}.` : `Тримай кожну ноту ${hold} с. Лінія дихання має лежати в золотій смузі.`); render();
   const off = listen((type,d)=>{
     if(pos>=items.length) return;
     if(type==='on'){ const m = matchNote(d.n, items[pos].n); events.push({t:d.t, ok:m.ok});
@@ -1099,7 +1117,7 @@ function runLong(box, ex, ctx){
       const bc = Settings.biteCC != null && typeof CCMON !== 'undefined' ? CCMON[Settings.biteCC] : null, bh = bc ? bc.hist.filter(h=>h[0] > holdStart + 350).map(h=>h[1]) : [];
       const biteSwing = bh.length > 3 ? Math.max(...bh) - Math.min(...bh) : 0;
       setHint(R, `Стабільність ${stab}. ${stab>=80?'Рівно.':s>6?'Тиск гуляє, тримай видих постійним.':'Виходиш за смугу, підбери силу видиху.'}${biteSwing > 25 ? ' Прикус коливався: розслаб губи, не стискай мундштук.' : ''}`, stab>=80 && biteSwing <= 25 ?'ok':'warn');
-      holdStart = 0; pos++; render(); if(pos>=items.length) finish();
+      holdStart = 0; pos++; render(); if(pos>=items.length){ Resume.clear(RK); finish(); } else Resume.set(RK, {pos, n:items.length, stats:stats.slice()});
     }
   });
   function finish(){ const score = mean(stats);
@@ -1138,7 +1156,8 @@ function runRhythm(box, ex, ctx){
     if(!s){ items = FULL; total = FULL_TOTAL; secStart = 0; secChords = ex.chords; secTracks = ex.tracks; pickup = PICK0; }
     else { const r = sliceSection(FULL, ex, s[0], s[1]); items = r.items; total = r.total; secStart = s[0]; secChords = r.chords; secTracks = r.tracks; pickup = s[0]===0 ? PICK0 : 0; }
     layout = scoreView(R.staff, items, vopts()); }
-  if(SEC) SEC.onChange = () => { if(!run) applySection(); };
+  const RK = Resume.key(ex);
+  if(SEC) SEC.onChange = () => { if(!run){ if(pausedRange){ pausedRange = null; hadPause = false; Resume.clear(RK); C.go.textContent = 'Почати'; } applySection(); } };
   // клік по ноті: почати з такту, в якому вона стоїть
   if(SEC) scoreClick(R.staff, ()=>layout, i=>{ if(run) return; let b = secStart; for(let k=0;k<i;k++) b += items[k].d; SEC.setStart(SEC.barOf(b)); toast(`Почнеш з такту ${SEC.barOf(b)}.`); });
   setFocus(R, items.find(i=>i.n!=null).n);
@@ -1147,11 +1166,13 @@ function runRhythm(box, ex, ctx){
   C.go.onclick = () => start();
   // пауза: зупиняємо на поточному такті, продовжуємо з його початку після відліку
   const BARS = barStartsOf(FULL_TOTAL, beats, PICK0);
+  setTimeout(()=>{ const rs = Resume.get(RK); if(rs && rs.range && rs.range[1] <= FULL_TOTAL + 1e-6 && rs.range[0] < rs.range[1]){ pausedRange = rs.range; hadPause = true;
+    const bar = BARS.indexOf(rs.range[0]) + 1; C.go.textContent = `▶ Продовжити з такту ${bar}`; setHint(R, `Минулого разу ти зупинився на такті ${bar}. Натисни «Продовжити» або вибери інший такт.`); } }, 0);
   function pause(){ if(!run) return false; const beat = Math.max(0, (now() - run.t0Perf)/run.spbMs), abs = secStart + Math.min(beat, total), end = secStart + total;
     let b0 = BARS[0]; for(const b of BARS) if(b <= abs + 1e-6) b0 = b; if(b0 < secStart) b0 = secStart;
     looping = false; run.stop(); run = null; MinusAudio.stop(); hadPause = true; pausedRange = b0 < end - 1e-6 ? [b0, end] : null;
-    const bar = BARS.indexOf(b0) + 1; C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
-  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; start(); return true; }
+    const bar = BARS.indexOf(b0) + 1; if(pausedRange) Resume.set(RK, {range:pausedRange}); C.go.textContent = pausedRange ? `▶ Продовжити з такту ${bar}` : 'Почати'; setHint(R, pausedRange ? `Пауза. Продовжиш з початку такту ${bar}, після відліку.` : 'Пауза.'); return true; }
+  function resume(){ if(!pausedRange){ return false; } resumeRange = pausedRange; pausedRange = null; Resume.clear(RK); start(); return true; }
   function start(){
     if(run){ pause(); return; }
     if(pausedRange){ resume(); return; }
@@ -1216,11 +1237,11 @@ function runRhythm(box, ex, ctx){
     const pass = ex.pass||75;
     if(score >= pass && (C.auto.checked || looping)){ const nb = Math.min(bpm+(SEC?SEC.step():4), ex.maxBpm||Math.round(ex.bpm*1.6)); C.bpm.value = nb; LS.set('tempo.'+ex.key, nb); advice.push(`Авто-темп: наступна спроба на ${nb} bpm.`); }
     LS.set('auto.'+ex.key, C.auto.checked);
-    const paused = hadPause; hadPause = false; if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
+    const paused = hadPause; hadPause = false; Resume.clear(RK); if(paused) advice.unshift('Спроба була з паузою, тому не зараховується в урок: для заліку зіграй вправу без зупинок.');
     showResult(R, {score, pass, bpm, advice: advice.join(' ') || 'Чисто і рівно в темпі.',
       stats:[['темп', bpm+' bpm'], ['ноти в часі', errs.filter(e=>Math.abs(e)<=tol).length+'/'+cnt], ['середнє відхилення', errs.length?Math.round(aErr)+' мс':'—'], ...(artic!=null?[[ex.artic==='legato'?'legato':'staccato', Math.round(artic)+'%']]:[]), ['неправильних нот', wrong.length]]}, paused ? Object.assign({}, ctx, {done:()=>{}}) : ctx);
   }
-  const cleanup = ()=>{ looping = false; off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
+  const cleanup = ()=>{ looping = false; if(run) pause(); off(); br.off(); stopLoop(); if(run) run.stop(); if(listenH) listenH.stop(); MinusAudio.stop(); if(Rec.mr) recStop(); };
   cleanup.pause = pause; cleanup.resume = resume; return cleanup;
 }
 
@@ -2470,7 +2491,9 @@ function go(view, arg){
 
 // ---------- Прогрес уроків ----------
 const lp = id => Progress.lessons[id] || (Progress.lessons[id] = {best:{}});
-function lessonDone(l){ const p = lp(l.id); return l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); }
+function lessonDone(l){ const p = lp(l.id); return !!p.manual || l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); }
+const lessonEarned = l => { const p = lp(l.id); return l.ex.every((e,i)=>(p.best[i]||0) >= passOf(e)); };
+const lessonAfter = l => LESSONS[LESSONS.indexOf(l)+1] || null;
 function nextLesson(){ return LESSONS.find(l=>!lessonDone(l)); }
 function recordResult(l, i, res){
   const p = lp(l.id); p.best[i] = Math.max(p.best[i]||0, Math.round(res.score)); p.last = Date.now();
@@ -2503,7 +2526,7 @@ function viewProgram(v){
       const bests = l.ex.map((e,i)=>lp(l.id).best[i]||0), started = bests.some(x=>x>0);
       const isHere = here===l, passed = l.ex.filter((e,i)=>(bests[i]||0)>=passOf(e)).length;
       b.className = 'lesson-btn'+(d?' done':'')+(isNext?' next':'')+(isHere?' here':'');
-      b.innerHTML = `<span class="num">${d?'✓':l.id.split('.')[1]}</span><div><b>${esc(l.title)}</b><span>${isHere?`Ти зупинився тут${d?' · пройдено':` · ${passed} з ${l.ex.length} вправ`}`:d?'Пройдено':isNext?'Наступний урок':started?`Розпочато · ${passed} з ${l.ex.length} вправ`:esc(l.goal)}</span>${isHere||started&&!d?`<i class="mini"><i style="width:${passed/l.ex.length*100}%"></i></i>`:''}</div>`;
+      b.innerHTML = `<span class="num">${d?'✓':l.id.split('.')[1]}</span><div><b>${esc(l.title)}</b><span>${isHere?`Ти зупинився тут${d?' · пройдено':` · ${passed} з ${l.ex.length} вправ`}`:d?(lessonEarned(l)?'Пройдено':'Позначено пройденим'):isNext?'Наступний урок':started?`Розпочато · ${passed} з ${l.ex.length} вправ`:esc(l.goal)}</span>${isHere||started&&!d?`<i class="mini"><i style="width:${passed/l.ex.length*100}%"></i></i>`:''}</div>`;
       b.onclick = ()=>go('lesson', isHere && last===l && !d ? {lesson:l, step:Progress.last.step} : l); sec.querySelector('.lessons').appendChild(b); });
     $('levels').appendChild(sec);
   });
@@ -2515,10 +2538,17 @@ function viewLesson(v, l, startStep){
   UI.lesson = l; UI.step = 0;
   const steps = [{k:'theory', t:'Теорія'}, ...l.ex.map((e,i)=>({k:'ex', i, t:(i+1)+'. '+e.title})), {k:'sum', t:'Підсумок'}];
   v.innerHTML = `<div class="muted">Рівень ${l.lvl}. ${esc(LEVELS[l.lvl-1].title)} · урок ${l.id}</div>
-    <h2 class="title">${esc(l.title)}</h2><p class="sub">${esc(l.goal)}</p>
+    <div class="row lesson-head"><div style="flex:1;min-width:260px"><h2 class="title">${esc(l.title)}</h2><p class="sub">${esc(l.goal)}</p></div>
+      <div class="row lesson-actions"><label class="muted done-toggle"><input type="checkbox" id="lDone"> урок пройдено</label>${lessonAfter(l)?`<button class="primary" id="lNext">Наступний урок →</button>`:''}</div></div>
     <div class="steps" id="steps"></div>
     <div class="grid2"><div id="stepBox"></div><aside id="side"></aside></div>`;
   Side.mount($('side'));
+  // ручна позначка «пройдено» і перехід до наступного уроку
+  const syncDone = () => { const p = lp(l.id), earned = lessonEarned(l); $('lDone').checked = lessonDone(l); $('lDone').disabled = earned;
+    $('lDone').parentElement.title = earned ? 'Урок пройдено за результатами вправ' : 'Познач, якщо вже вмієш це і хочеш рухатися далі'; };
+  syncDone();
+  $('lDone').onchange = () => { const p = lp(l.id); if($('lDone').checked){ p.manual = Date.now(); toast(`Урок ${l.id} позначено як пройдений.`, lessonAfter(l) ? [['Наступний урок →', ()=>go('lesson', lessonAfter(l))]] : null); } else delete p.manual; saveProgress(); syncDone(); };
+  if($('lNext')) $('lNext').onclick = () => go('lesson', lessonAfter(l));
   const renderSteps = () => { const p = lp(l.id); $('steps').innerHTML = '';
     steps.forEach((s,k)=>{ const b = document.createElement('button'); b.textContent = s.t; b.setAttribute('aria-current', k===UI.step);
       if(s.k==='ex' && (p.best[s.i]||0) >= passOf(l.ex[s.i])) b.classList.add('passed');
@@ -2547,7 +2577,11 @@ function viewLesson(v, l, startStep){
         again:()=>show(k), next:()=>show(k+1) });
     } else {
       const p = lp(l.id), d = lessonDone(l), idx = LESSONS.indexOf(l), nx = LESSONS[idx+1];
-      box.innerHTML = `<div class="result ${d?'pass':''}"><div class="score">${d?'Урок пройдено':'Ще не всі вправи пройдено'}</div></div>
+      setTimeout(()=>{ const m = $('sumMark'), n = $('sumNext'); if(m) m.onclick = ()=>{ $('lDone').checked = true; $('lDone').onchange(); show(k); }; if(n) n.onclick = ()=>go('lesson', nx); }, 0);
+      const manualOnly = d && !lessonEarned(l);
+      box.innerHTML = `<div class="result ${d?'pass':''}"><div class="score">${d ? (manualOnly ? 'Урок позначено пройденим' : 'Урок пройдено') : 'Ще не всі вправи пройдено'}</div>
+          ${manualOnly ? '<p class="muted">Позначка ручна. Вправи можна пройти будь-коли, результати збережуться.</p>' : ''}
+          <div class="row" style="margin-top:10px">${!d ? '<button id="sumMark">Позначити урок пройденим</button>' : ''}${nx ? `<button class="primary" id="sumNext">Наступний урок: ${esc(nx.id+' '+nx.title)} →</button>` : '<span class="muted">Це останній урок програми.</span>'}</div></div>
         <table style="margin-top:14px"><tr><th>Вправа</th><th>Найкращий результат</th><th>Прохідний</th></tr>
         ${l.ex.map((e,i)=>`<tr><td>${esc(e.title)}</td><td>${p.best[i]!=null?p.best[i]:'—'}</td><td>${passOf(e)}</td></tr>`).join('')}</table>
         <h3>Типові помилки</h3><ul class="theory">${l.mistakes.map(m=>`<li>${noteText(esc(m))}</li>`).join('')}</ul>
@@ -2901,7 +2935,7 @@ function songPlay(v, s){
     <div class="grid2"><div id="box"></div><aside id="side"></aside></div>`;
   Side.mount($('side')); $('back').onclick = e=>{ e.preventDefault(); go('songs'); };
   let stop = null;
-  const tabs = k => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); $('t4').setAttribute('aria-current', false); const box = $('box');
+  const tabs = k => { LS.set('tab.song.'+s.id, k); if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', i===k)); $('t4').setAttribute('aria-current', false); const box = $('box');
     if(k===0){
       box.innerHTML = `<div class="theory">
         <div class="row" style="margin:6px 0 14px"><button class="primary" id="pl">▶ Послухати з фонограмою</button>
@@ -2929,7 +2963,7 @@ function songPlay(v, s){
     } };
   $('t4').onclick = () => { if(stop){ stop(); stop = null; } [0,1,2].forEach(i=>$('t'+i).setAttribute('aria-current', false)); $('t4').setAttribute('aria-current', true);
     stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Фонограма грає далі лише тоді, коли ти береш правильну ноту.', seq:s.seq, beats:s.beats, den:s.den, bpm:s.bpm, chords:s.chords, style:s.style, key:'wait.songs.'+s.id, pass:80}, {done(){}, again:()=>$('t4').click(), next:()=>tabs(2)}); };
-  [0,1,2].forEach(i=>$('t'+i).onclick = ()=>tabs(i)); $('t3').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, den:s.den, chords:s.chords, style:s.style, back:['songs', s.id]}); tabs(0);
+  [0,1,2].forEach(i=>$('t'+i).onclick = ()=>tabs(i)); $('t3').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, den:s.den, chords:s.chords, style:s.style, back:['songs', s.id]}); tabs([0,1,2].includes(LS.get('tab.song.'+s.id, 0)) ? LS.get('tab.song.'+s.id, 0) : 0);
   UI.cleanup = ()=>{ if(stop) stop(); };
 }
 
@@ -2944,7 +2978,7 @@ async function repPlay(v, s){
   const audio = s.audio ? {...s.audio, url: await MediaStore.url(await MediaStore.pick(s.audio))} : null;
   let stop = null;
   const onMute = arr => { s.muted = arr; saveRepItem({id:s.id, muted:arr}); };
-  const mode = k => { if(stop) stop(); stop = null; [1,2,3,5,6].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
+  const mode = k => { if(stop) stop(); stop = null; LS.set('tab.rep.'+s.id, k); [1,2,3,5,6].forEach(i=>$('m'+i).setAttribute('aria-current', i===k));
     if(k===5){ stop = RUNNERS.wait($('box'), {type:'wait', title:'Режим очікування', how:'Супровід чекає на кожну правильну ноту. Так п\'єсу вчать без поспіху, але разом з гуртом.', seq:s.seq, bpm:s.bpm, beats:s.beats, key:'wait.'+s.id, chords:s.chords||null, style:s.style||'pop', tracks:s.tracks, muted:s.muted, onMute, pass:80}, {done(){}, again:()=>mode(5), next:()=>mode(2)}); return; }
     if(k===6){ if(!s.chords){ $('box').innerHTML = '<div class="theory"><p>Для імпровізації потрібні акорди. Імпортуй мелодію з доріжками супроводу або впиши акорди вручну.</p></div>'; return; }
       stop = RUNNERS.improv($('box'), {type:'improv', title:'Імпровізація на гармонію пісні', how:`Акорди пісні${s.chordsAuto?' визначено автоматично з доріжок':''}. Над станом видно поточний акорд, звуки акорду на сильних долях дають найкращий результат.`, bpm:s.bpm, loops:1, beats:s.beats||4, scaleSeq:scaleFromChords(s.chords), chords:chordsForImprov(s.chords), pass:65}, {done(){}, again:()=>mode(6), next:()=>mode(6)}); return; }
@@ -2955,7 +2989,7 @@ async function repPlay(v, s){
       again:()=>mode(k), next:()=>mode(2) }); };
   $('m1').onclick = ()=>mode(1); $('m2').onclick = ()=>mode(2); $('m3').onclick = ()=>mode(3); $('m5').onclick = ()=>mode(5); $('m6').onclick = ()=>mode(6);
   $('m4').onclick = ()=>go('perform', {title:s.title, seq:s.seq, bpm:s.bpm, beats:s.beats, chords:s.chords, style:s.style, tracks:s.tracks, muted:s.muted, audio, back:['rep', s.id]});
-  mode(1);
+  mode([1,2,3,5,6].includes(LS.get('tab.rep.'+s.id, 1)) ? LS.get('tab.rep.'+s.id, 1) : 1);
   UI.cleanup = ()=>{ if(stop) stop(); MinusAudio.stop(); };
 }
 function minusTab(box, s, audio, reload){
@@ -3139,25 +3173,34 @@ function dailyPlan(){
       ex:{type:'rhythm', title:sg.title, how:'З фонограмою.', seq:sg.seq, beats:sg.beats, den:sg.den, bpm:Math.round(sg.bpm*0.85), maxBpm:sg.maxBpm, tol:85, chords:sg.chords, style:sg.style, key:'songs.'+sg.id, pass:75, allowLoop:true}, song:sg}); }
   return steps;
 }
-function viewDaily(v){
-  const steps = dailyPlan(), t0 = now(), results = []; let k = -1, stop = null;
+// план дня зберігається, щоб після переходу в інший розділ продовжити з того самого кроку
+function saveDaily(st){ Progress.dailyState = st; LS.set('progress', Progress); }
+function hydrateStep(s){ const x = {...s}; if(x.lessonId){ x.lesson = LESSONS.find(l=>l.id===x.lessonId); if(x.lesson) x.ex = x.lesson.ex[x.idx]; } if(x.songId) x.song = SONGS.find(z=>z.id===x.songId); return x; }
+function dryStep(s){ const x = {...s}; if(x.lesson){ x.lessonId = x.lesson.id; delete x.lesson; delete x.ex; } if(x.song){ x.songId = x.song.id; delete x.song; } return x; }
+function viewDaily(v, opts){
+  let saved = Progress.dailyState && Progress.dailyState.date === today() && !(opts && opts.fresh) ? Progress.dailyState : null;
+  if(saved && saved.k >= saved.plan.length) saved = null;
+  const steps = saved ? saved.plan.map(hydrateStep).filter(s=>s.ex || s.reading) : dailyPlan();
+  const t0 = now() - (saved ? saved.elapsed||0 : 0), results = saved ? saved.results.slice() : []; let k = -1, stop = null;
+  const persist = () => saveDaily({date:today(), plan:steps.map(dryStep), k, results, elapsed: now() - t0});
   const total = steps.reduce((a,s)=>a+s.min,0);
   v.innerHTML = `<h2 class="title">Заняття дня</h2><p class="sub">${steps.length} кроків, близько ${total} хвилин. План складено з твого прогресу: проблемні ноти, наступний урок і слабкі такти репертуару.</p>
     <div class="steps" id="dSteps">${steps.map((s,i)=>`<button data-d="${i}" disabled>${i+1}. ${esc(s.title)}</button>`).join('')}</div>
-    <div class="row" style="justify-content:space-between;margin:6px 0"><span class="muted" id="dWhy"></span><span class="row"><span class="muted" id="dClock">0:00</span><button class="small" id="dSkip">Пропустити крок</button></span></div>
+    <div class="row" style="justify-content:space-between;margin:6px 0"><span class="muted" id="dWhy"></span><span class="row"><span class="muted" id="dClock">0:00</span><button class="small" id="dSkip">Пропустити крок</button><button class="small" id="dNew">Новий план</button></span></div>
     <div class="grid2"><div id="dBox"></div><aside id="side"></aside></div>`;
   Side.mount($('side'));
   const clock = setInterval(()=>{ const s = Math.floor((now()-t0)/1000); const c = $('dClock'); if(c) c.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }, 1000);
-  const step = i => { if(stop) stop(); stop = null; k = i; document.querySelectorAll('[data-d]').forEach(b=>{ const j = +b.dataset.d; b.setAttribute('aria-current', j===i); b.disabled = j > i; });
+  const step = i => { if(stop) stop(); stop = null; k = i; persist(); document.querySelectorAll('[data-d]').forEach(b=>{ const j = +b.dataset.d; b.setAttribute('aria-current', j===i); b.disabled = j > i && j > (saved ? saved.maxK||0 : 0); b.onclick = () => { if(j <= Math.max(k, maxK)) step(j); }; });
     if(i >= steps.length){ finish(); return; }
     const s = steps[i]; $('dWhy').textContent = s.why;
-    const ctx = { done:res=>{ results[i] = Math.round(res.score ?? res.acc ?? 0);
+    maxK = Math.max(maxK, i);
+    const ctx = { done:res=>{ results[i] = Math.round(res.score ?? res.acc ?? 0); persist();
         if(s.lesson){ const p = lp(s.lesson.id); p.best[s.idx] = Math.max(p.best[s.idx]||0, Math.round(res.score)); Progress.log.unshift({at:Date.now(), lesson:s.lesson.id, ex:s.ex.title, score:Math.round(res.score), bpm:res.bpm}); saveProgress(); }
         if(s.song) saveSongBest(s.song.id, 'play', res.score, res.bpm); },
       again:()=>step(i), next:()=>step(i+1) };
     if(s.reading){ stop = runReading($('dBox'), s.reading, r=>{ results[i] = Math.round(r.acc); $('dBox').innerHTML = `<div class="result pass"><div><span class="score">${r.avg.toFixed(2)} с</span><span class="muted"> на ноту, точність ${Math.round(r.acc)}%</span></div><div class="row" style="margin-top:8px"><button class="primary" id="dNext">Далі</button></div></div>`; $('dNext').onclick = ()=>step(i+1); }); }
     else stop = RUNNERS[s.ex.type]($('dBox'), s.ex, ctx); };
-  function finish(){ const min = Math.round((now()-t0)/60000); Progress.daily = Progress.daily || {}; Progress.daily[today()] = {min, steps:steps.length, done:results.filter(x=>x!=null).length}; saveProgress(); checkBadges();
+  function finish(){ const min = Math.round((now()-t0)/60000); saveDaily({date:today(), plan:steps.map(dryStep), k:steps.length, results, elapsed: now() - t0}); Progress.daily = Progress.daily || {}; Progress.daily[today()] = {min, steps:steps.length, done:results.filter(x=>x!=null).length}; saveProgress(); checkBadges();
     $('dWhy').textContent = ''; $('dBox').innerHTML = `<div class="result pass"><div><span class="score">Готово</span><span class="muted"> · ${min} хв</span></div>
       <table class="fing">${steps.map((s,i)=>`<tr><td>${esc(s.title)}</td><td>${results[i]!=null?results[i]:'пропущено'}</td></tr>`).join('')}</table>
       <textarea class="report" id="dJ" style="min-height:60px;margin-top:10px" placeholder="Нотатка до заняття: що вийшло, що заважало…"></textarea>
@@ -3165,8 +3208,11 @@ function viewDaily(v){
     const saveJ = () => { const tx = $('dJ') && $('dJ').value.trim(); if(tx){ journalAdd(tx); $('dJ').value = ''; } };
     $('dT').onclick = ()=>{ saveJ(); go('teacher'); }; $('dP').onclick = ()=>{ saveJ(); go('program'); }; }
   $('dSkip').onclick = () => step(k+1);
-  step(0);
-  UI.cleanup = () => { if(stop) stop(); clearInterval(clock); };
+  $('dNew').onclick = () => { if(confirm('Скласти новий план заняття? Поточний прогрес кроків буде скинуто.')){ Progress.dailyState = null; LS.set('progress', Progress); go('daily', {fresh:true}); } };
+  let maxK = saved ? saved.k : 0;
+  if(saved){ step(saved.k); toast(`Продовжуємо заняття з кроку ${saved.k+1}: «${steps[saved.k].title}».`); } else step(0);
+  const tick = setInterval(()=>{ if(k >= 0 && k < steps.length) persist(); }, 15000);
+  UI.cleanup = () => { if(k >= 0 && k < steps.length) persist(); if(stop) stop(); clearInterval(clock); clearInterval(tick); };
 }
 
 // ---------- Досягнення ----------
@@ -3281,13 +3327,15 @@ function runWait(box, ex, ctx){
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
   const BARS = barStartsOf(items.reduce((a,b)=>a+b.d,0), beats, ex.pickup ?? pickupOf(ex.chords, beats));
   C.from.max = BARS.length; C.from.value = clamp(LS.get('from.'+ex.key, 1), 1, BARS.length); C.from.onchange = () => { C.from.value = clamp(+C.from.value||1, 1, BARS.length); LS.set('from.'+ex.key, +C.from.value); };
-  let startK = 0;
+  let startK = 0; const RK = Resume.key(ex), rsW = Resume.get(RK);
   const starts = []; { let c = 0; items.forEach(it=>{ starts.push(c); c += it.d; }); }
   const idx = items.map((it,i)=>i).filter(i=>items[i].n!=null);
   const marks = items.map(()=>({}));
   const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, marks, chordLabels: chordLabelsOf(ex.chords)});
   let layout = scoreView(R.staff, items, vopts()); viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); layout.update(cur>=0 ? starts[idx[cur]] : 0); });
   trackChips(box.querySelector('.focus'), ex, ()=> seg ? seg.mix : null);
+  let resumeK = rsW && rsW.k > 0 && rsW.k < idx.length && rsW.n === idx.length ? rsW.k : null;
+  if(resumeK != null) setTimeout(()=>{ C.go.textContent = '▶ Продовжити'; setHint(R, `Минулого разу ти зупинився на ноті ${resumeK+1} з ${idx.length}. Натисни «Продовжити».`); }, 0);
   setTimeout(()=>scoreClick(R.staff, ()=>layout, i=>{ if(active) return; let b = 0; for(let k=0;k<i;k++) b += items[k].d; let bar = 1; BARS.forEach((s,k)=>{ if(s <= b + 1e-6) bar = k+1; }); C.from.value = bar; LS.set('from.'+ex.key, bar); toast(`Почнеш з такту ${bar}.`); }), 0);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   let cur = -1, seg = null, segTimer = 0, active = false, misses = 0, firstTry = 0, waitFrom = 0; const waits = [];
@@ -3302,11 +3350,12 @@ function runWait(box, ex, ctx){
     seg = schedule({bpm:bpm(), beats, countIn:0, totalBeats:r.total, clickOn:!ex.chords && !(ex.tracks && ex.tracks.length),
       backing: C.back && C.back.checked && r.chords ? {chords:r.chords, style:ex.style} : null, tracks: r.tracks && r.tracks.length ? {list:r.tracks, muted:ex.muted||r.tracks.map(()=>false)} : null});
     segTimer = setTimeout(()=>{ onEnd && onEnd(); }, seg.endPerf - now()); }
-  function waitNote(k){ cur = k; if(k >= idx.length){ finish(); return; } waitFrom = now(); misses = 0; show();
+  function waitNote(k){ cur = k; if(k >= idx.length){ Resume.clear(RK); finish(); return; } if(k > 0) Resume.set(RK, {k, n:idx.length}); waitFrom = now(); misses = 0; show();
     setHint(R, `Чекаю ${withKeys(items[idx[k]].n)}.`); }
   C.go.onclick = () => { if(active){ stop(); return; } active = true; C.go.textContent = '■ Стоп'; Object.keys(marks).forEach(k=>marks[k] = {}); firstTry = 0; waits.length = 0; R.result.innerHTML = '';
     // старт із вибраного такту: перша нота, що починається в ньому або пізніше
     const fromBeat = BARS[clamp(+C.from.value||1, 1, BARS.length) - 1]; startK = Math.max(0, idx.findIndex(i=>starts[i] >= fromBeat - 1e-6)); if(startK < 0) startK = 0;
+    if(resumeK != null){ startK = resumeK; resumeK = null; Resume.clear(RK); waitNote(startK); return; }
     const intro = idx.length ? starts[idx[startK]] - fromBeat : 0;
     if(intro > 0.01){ setHint(R, 'Вступ…'); playSeg(fromBeat, starts[idx[startK]], ()=>waitNote(startK)); } else waitNote(startK); };
   function stop(){ active = false; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); C.go.textContent = 'Почати'; cur = -1; }
@@ -3498,7 +3547,7 @@ function viewRhythmTrainer(v){
         <div class="pb-inner"></div>`;
       bar = box.querySelector('.practice-bar'); inner = box.querySelector('.pb-inner');
       bar.querySelectorAll('[data-m]').forEach(b=>b.onclick = () => setMode(b.dataset.m));
-      bar.querySelector('[data-a=restart]').onclick = () => mount();
+      bar.querySelector('[data-a=restart]').onclick = () => { Resume.clear(Resume.key(ex)); Resume.clear((ex.key||'x') + '.wait'); mount(); };
       const pb = bar.querySelector('[data-a=pause]'), stateEl = bar.querySelector('.pb-state');
       pb.onclick = () => paused ? doResume() : doPause();
       if(canWait && mode === 'wait'){

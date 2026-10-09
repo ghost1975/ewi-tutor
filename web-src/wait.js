@@ -9,13 +9,15 @@ function runWait(box, ex, ctx){
   const C = {}; box.querySelectorAll('[data-c]').forEach(e=>C[e.dataset.c]=e);
   const BARS = barStartsOf(items.reduce((a,b)=>a+b.d,0), beats, ex.pickup ?? pickupOf(ex.chords, beats));
   C.from.max = BARS.length; C.from.value = clamp(LS.get('from.'+ex.key, 1), 1, BARS.length); C.from.onchange = () => { C.from.value = clamp(+C.from.value||1, 1, BARS.length); LS.set('from.'+ex.key, +C.from.value); };
-  let startK = 0;
+  let startK = 0; const RK = Resume.key(ex), rsW = Resume.get(RK);
   const starts = []; { let c = 0; items.forEach(it=>{ starts.push(c); c += it.d; }); }
   const idx = items.map((it,i)=>i).filter(i=>items[i].n!=null);
   const marks = items.map(()=>({}));
   const vopts = () => ({rhythmic:true, beats, den:ex.den, pickup, marks, chordLabels: chordLabelsOf(ex.chords)});
   let layout = scoreView(R.staff, items, vopts()); viewToggle(R.staff, ()=>{ layout = scoreView(R.staff, items, vopts()); layout.update(cur>=0 ? starts[idx[cur]] : 0); });
   trackChips(box.querySelector('.focus'), ex, ()=> seg ? seg.mix : null);
+  let resumeK = rsW && rsW.k > 0 && rsW.k < idx.length && rsW.n === idx.length ? rsW.k : null;
+  if(resumeK != null) setTimeout(()=>{ C.go.textContent = '▶ Продовжити'; setHint(R, `Минулого разу ти зупинився на ноті ${resumeK+1} з ${idx.length}. Натисни «Продовжити».`); }, 0);
   setTimeout(()=>scoreClick(R.staff, ()=>layout, i=>{ if(active) return; let b = 0; for(let k=0;k<i;k++) b += items[k].d; let bar = 1; BARS.forEach((s,k)=>{ if(s <= b + 1e-6) bar = k+1; }); C.from.value = bar; LS.set('from.'+ex.key, bar); toast(`Почнеш з такту ${bar}.`); }), 0);
   prepareSound({seq:items, chords:ex.chords, tracks:ex.tracks});
   let cur = -1, seg = null, segTimer = 0, active = false, misses = 0, firstTry = 0, waitFrom = 0; const waits = [];
@@ -30,11 +32,12 @@ function runWait(box, ex, ctx){
     seg = schedule({bpm:bpm(), beats, countIn:0, totalBeats:r.total, clickOn:!ex.chords && !(ex.tracks && ex.tracks.length),
       backing: C.back && C.back.checked && r.chords ? {chords:r.chords, style:ex.style} : null, tracks: r.tracks && r.tracks.length ? {list:r.tracks, muted:ex.muted||r.tracks.map(()=>false)} : null});
     segTimer = setTimeout(()=>{ onEnd && onEnd(); }, seg.endPerf - now()); }
-  function waitNote(k){ cur = k; if(k >= idx.length){ finish(); return; } waitFrom = now(); misses = 0; show();
+  function waitNote(k){ cur = k; if(k >= idx.length){ Resume.clear(RK); finish(); return; } if(k > 0) Resume.set(RK, {k, n:idx.length}); waitFrom = now(); misses = 0; show();
     setHint(R, `Чекаю ${withKeys(items[idx[k]].n)}.`); }
   C.go.onclick = () => { if(active){ stop(); return; } active = true; C.go.textContent = '■ Стоп'; Object.keys(marks).forEach(k=>marks[k] = {}); firstTry = 0; waits.length = 0; R.result.innerHTML = '';
     // старт із вибраного такту: перша нота, що починається в ньому або пізніше
     const fromBeat = BARS[clamp(+C.from.value||1, 1, BARS.length) - 1]; startK = Math.max(0, idx.findIndex(i=>starts[i] >= fromBeat - 1e-6)); if(startK < 0) startK = 0;
+    if(resumeK != null){ startK = resumeK; resumeK = null; Resume.clear(RK); waitNote(startK); return; }
     const intro = idx.length ? starts[idx[startK]] - fromBeat : 0;
     if(intro > 0.01){ setHint(R, 'Вступ…'); playSeg(fromBeat, starts[idx[startK]], ()=>waitNote(startK)); } else waitNote(startK); };
   function stop(){ active = false; if(seg){ seg.stop(); seg = null; } clearTimeout(segTimer); C.go.textContent = 'Почати'; cur = -1; }
